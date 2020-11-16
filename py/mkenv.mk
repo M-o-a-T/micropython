@@ -48,7 +48,7 @@ CD = cd
 CP = cp
 FIND = find
 MKDIR = mkdir
-PYTHON = python
+PYTHON = python3
 # Set default python interpreters
 PYTHON2 ?= $(which python2 || which python2.7)
 PYTHON3 ?= python3

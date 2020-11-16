@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # This pre-processor parses provided objects' c files for
 # MP_REGISTER_MODULE(module_name, obj_module, enabled_define)
