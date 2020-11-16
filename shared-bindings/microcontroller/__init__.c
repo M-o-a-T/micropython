@@ -92,6 +92,52 @@ STATIC mp_obj_t mcu_enable_interrupts(void) {
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(mcu_enable_interrupts_obj, mcu_enable_interrupts);
 
+//| def interrupt_after_ms(delay: int) -> None:
+//|     """Trigger an interrupt after ``(delay)`` milliseconds.
+//|     Call this after disabling interrupts and before calling
+//|     ``sleep_until_interrupt``."""
+//|     ...
+//|
+STATIC mp_obj_t mcu_interrupt_after_ms(mp_obj_t delay_obj) {
+    uint32_t delay = mp_obj_get_int(delay_obj);
+
+    port_interrupt_after_ticks(delay);
+
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(mcu_interrupt_after_ms_obj, mcu_interrupt_after_ms);
+
+//| def sleep_until_interrupt() -> None:
+//|     """Halt the controller until the next interrupt arrives.
+//|     Should be called with interrupts disabled; the ``halt`` instruction
+//|     will atomically re-enable them.
+//|
+//|     If you use this method, your code needs to handle race conditions
+//|     safely. For example:
+//|
+//|         while True:
+//|             do_the_work()
+//|             if pending_work():
+//|                 continue
+//|             else:
+//|                 microcontroller.disable_interrupts()
+//|                 if pending_work():
+//|                     microcontroller.enable_interrupts()
+//|                     continue
+//|                 if need_timeouts():
+//|                     microcontroller.interrupt_after_ms(calculate_timeout())
+//|                 microcontroller.sleep_until_interrupt()
+//|                 # interrupts are re-enabled at this point
+//|     """
+//|     ...
+//|
+STATIC mp_obj_t mcu_sleep_until_interrupt() {
+    port_sleep_until_interrupt();
+
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_0(mcu_sleep_until_interrupt, mcu_sleep_until_interrupt);
+
 //| def on_next_reset(run_mode: microcontroller.RunMode) -> Any:
 //|     """Configure the run mode used the next time the microcontroller is reset but
 //|     not powered down.
@@ -160,6 +206,8 @@ STATIC const mp_rom_map_elem_t mcu_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_delay_us), MP_ROM_PTR(&mcu_delay_us_obj) },
     { MP_ROM_QSTR(MP_QSTR_disable_interrupts), MP_ROM_PTR(&mcu_disable_interrupts_obj) },
     { MP_ROM_QSTR(MP_QSTR_enable_interrupts), MP_ROM_PTR(&mcu_enable_interrupts_obj) },
+    { MP_ROM_QSTR(MP_QSTR_interrupt_after_ms), MP_ROM_PTR(&mcu_interrupt_after_ms) },
+    { MP_ROM_QSTR(MP_QSTR_sleep_until_interrupt), MP_ROM_PTR(&mcu_sleep_until_interrupt) },
     { MP_ROM_QSTR(MP_QSTR_on_next_reset), MP_ROM_PTR(&mcu_on_next_reset_obj) },
     { MP_ROM_QSTR(MP_QSTR_reset), MP_ROM_PTR(&mcu_reset_obj) },
     #if CIRCUITPY_INTERNAL_NVM_SIZE > 0
