@@ -75,6 +75,7 @@ set(MICROPY_SOURCE_LIB
     ${MICROPY_DIR}/shared/runtime/stdout_helpers.c
     ${MICROPY_DIR}/shared/runtime/sys_stdio_mphal.c
     ${MICROPY_DIR}/shared/timeutils/timeutils.c
+    ${MICROPY_DIR}/lib/min/target/min.c
 )
 
 set(MICROPY_SOURCE_DRIVERS
@@ -105,6 +106,11 @@ set(MICROPY_SOURCE_PORT
     rp2_pio.c
     tusb_port.c
     uart.c
+    canis/common.c
+    canis/canhack.c
+    canis/rp2_canhack.c
+    canis/rp2_can.c
+    canis/rp2_min.c
 )
 
 set(MICROPY_SOURCE_QSTR
@@ -128,6 +134,9 @@ set(MICROPY_SOURCE_QSTR
     ${PROJECT_SOURCE_DIR}/modutime.c
     ${PROJECT_SOURCE_DIR}/rp2_flash.c
     ${PROJECT_SOURCE_DIR}/rp2_pio.c
+    ${PROJECT_SOURCE_DIR}/canis/rp2_canhack.c
+    ${PROJECT_SOURCE_DIR}/canis/rp2_can.c
+    ${PROJECT_SOURCE_DIR}/canis/rp2_min.c
 )
 
 set(PICO_SDK_COMPONENTS
@@ -233,6 +242,7 @@ target_sources(${MICROPY_TARGET} PRIVATE
 target_link_libraries(${MICROPY_TARGET} usermod)
 
 target_include_directories(${MICROPY_TARGET} PRIVATE
+    ${PICO_TINYUSB_PATH}/src
     ${MICROPY_INC_CORE}
     ${MICROPY_INC_USERMOD}
     ${MICROPY_BOARD_DIR}

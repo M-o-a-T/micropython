@@ -169,6 +169,9 @@ extern const struct _mod_network_nic_type_t mod_network_nic_type_nina;
 #define MICROPY_PORT_ROOT_POINTER_NINAW10
 #endif
 
+extern const struct _mp_obj_type_t rp2_canhack_type;
+extern const struct _mp_obj_type_t rp2_can_type;
+
 #define MICROPY_PORT_BUILTIN_MODULES \
     { MP_OBJ_NEW_QSTR(MP_QSTR_machine), (mp_obj_t)&mp_module_machine }, \
     { MP_OBJ_NEW_QSTR(MP_QSTR__onewire), (mp_obj_t)&mp_module_onewire }, \
@@ -189,6 +192,8 @@ extern const struct _mod_network_nic_type_t mod_network_nic_type_nina;
     const char *readline_hist[8]; \
     void *machine_pin_irq_obj[30]; \
     void *rp2_pio_irq_obj[2]; \
+    struct _rp2_can_obj_t *rp2_can_obj; \
+    struct _rp2_min_obj_t *rp2_min_obj; \
     void *rp2_state_machine_irq_obj[8]; \
     void *rp2_uart_rx_buffer[2]; \
     void *rp2_uart_tx_buffer[2]; \

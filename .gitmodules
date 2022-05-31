@@ -42,3 +42,6 @@
 [submodule "lib/pico-sdk"]
 	path = lib/pico-sdk
 	url = https://github.com/raspberrypi/pico-sdk.git
+[submodule "lib/min"]
+	path = lib/min
+	url = https://github.com/min-protocol/min.git

@@ -4,6 +4,7 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2016-2021 Damien P. George
+ * (Modifications to the code for the MCP2517/18FD CAN controller (c) 2021 Canis Automotive Labs)
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -67,6 +68,10 @@ typedef struct _machine_pin_irq_obj_t {
     mp_irq_obj_t base;
     uint32_t flags;
     uint32_t trigger;
+
+    // Precompute a pointer to the relevant INTR register and an event mask to determine if it has happened
+    io_rw_32 *intr;
+    uint32_t event_mask;
 } machine_pin_irq_obj_t;
 
 STATIC const mp_irq_methods_t machine_pin_irq_methods;
@@ -104,25 +109,54 @@ STATIC const machine_pin_obj_t machine_pin_obj[NUM_BANK0_GPIOS] = {
     {{&machine_pin_type}, 29},
 };
 
+
+#include <inttypes.h>
+
+#include "canis/rp2_mcp251718fd.h"
+
 // Mask with "1" indicating that the corresponding pin is in simulated open-drain mode.
 uint32_t machine_pin_open_drain_mask;
 
-STATIC void gpio_irq(void) {
-    for (int i = 0; i < 4; ++i) {
-        uint32_t intr = iobank0_hw->intr[i];
-        if (intr) {
-            for (int j = 0; j < 8; ++j) {
-                if (intr & 0xf) {
-                    uint32_t gpio = 8 * i + j;
-                    gpio_acknowledge_irq(gpio, intr & 0xf);
-                    machine_pin_irq_obj_t *irq = MP_STATE_PORT(machine_pin_irq_obj[gpio]);
-                    if (irq != NULL && (intr & irq->trigger)) {
-                        irq->flags = intr & irq->trigger;
-                        mp_irq_handler(&irq->base);
-                    }
-                }
-                intr >>= 4;
-            }
+// This is an unused interrupt on the RP2040 and can be used as a handoff for handling GPIO interrupts
+// in MicroPython after the fast GPIO ISR has run.
+#define IO_IRQ_HANDOFF  (31U)
+
+// Mask to see if the MCP2518 has interrupted
+#define SPI_IRQ_LEVEL_MASK          1U << (4U * (SPI_IRQ_GPIO % 8U))
+
+STATIC  TIME_CRITICAL void gpio_irq(void) {
+    // If the CAN subsystem has been initialized
+    if (MP_STATE_PORT(rp2_can_obj) != NULL && (iobank0_hw->intr[SPI_IRQ_GPIO / 8] & SPI_IRQ_LEVEL_MASK)) {
+        // CANPico board has a level sensitive IRQ
+        //
+        // The core that is interrupted is programmed when the interrupt is enabled, and is set to the core
+        // that made the CAN() constructor call. The event for this interrupt and the core is fixed so there is no
+        // need to do any checking, and instead if the SPI_IRQ_GPIO pin has caused the IRQ then it is handled
+        // by this core.
+        mcp251718fd_irq_handler();
+    }
+
+    // This GPIO vector is shared, and needs to be of high priority to service the MCP2518. But
+    // accessing the rest of the MicroPython code could touch flash and run very slowly. So
+    // either go straight to the MCP2518 drivers or raise a deferred ISR on a vector lower
+    // priority (equal to the other ISRs). Can make an unused IRQ pending and direct that to
+    // the MicroPython GPIO vector handler.
+    //
+    // Hand off everything else to the MicroPython handler at lower priority; this requires that
+    // the IRQ is acknowledged here.
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // Scan through the interrupt handlers to see if any of them have occurred
+    for (uint32_t gpio = 0; gpio < MP_ARRAY_SIZE(machine_pin_obj); gpio++) {
+        machine_pin_irq_obj_t *irq = MP_STATE_PORT(machine_pin_irq_obj[gpio]);
+
+        if (irq != NULL && (*irq->intr & irq->event_mask)) {
+            irq->flags = *irq->intr & irq->event_mask;
+            // Acknowledge interrupt (if edge sensitive)
+            *irq->intr = irq->event_mask;
+            // TODO move to being handled in the hand-off ISR
+            mp_irq_handler(&irq->base);
         }
     }
 }
@@ -350,6 +384,12 @@ STATIC mp_obj_t machine_pin_irq(size_t n_args, const mp_obj_t *pos_args, mp_map_
         irq->base.ishard = args[ARG_hard].u_bool;
         irq->flags = 0;
         irq->trigger = args[ARG_trigger].u_int;
+
+        // Precompute interrupt status register to dismiss edge interrupts and detect interrupt events
+        irq->intr = &iobank0_hw->intr[self->id & 0x3U];
+        // Four events per interrupt (rising edge, falling edge, level high, level low)
+        // Eight interrupts per register
+        irq->event_mask = irq->trigger << ((self->id & 0x7U) << 2);
 
         // Enable IRQ if a handler is given.
         if (args[ARG_handler].u_obj != mp_const_none) {
