@@ -34,23 +34,29 @@
 #define MICROPY_HW_USB_PID (0x0005) // RP2 MicroPython
 #endif
 
-#define USBD_DESC_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN)
-#define USBD_MAX_POWER_MA (250)
+#define USBD_DESC_LEN               (TUD_CONFIG_DESC_LEN + (CFG_TUD_CDC * TUD_CDC_DESC_LEN))
+#define USBD_MAX_POWER_MA           (250U)
 
-#define USBD_ITF_CDC (0) // needs 2 interfaces
-#define USBD_ITF_MAX (2)
+#define USBD_ITF_CDC_0              (0) // needs 2 interfaces
+#define USBD_ITF_CDC_1              (2U)
+#define USBD_ITF_MAX                (4U)
 
-#define USBD_CDC_EP_CMD (0x81)
-#define USBD_CDC_EP_OUT (0x02)
-#define USBD_CDC_EP_IN (0x82)
-#define USBD_CDC_CMD_MAX_SIZE (8)
-#define USBD_CDC_IN_OUT_MAX_SIZE (64)
+#define USBD_CDC_0_EP_CMD           (0x81U)
+#define USBD_CDC_0_EP_OUT           (0x02U)
+#define USBD_CDC_0_EP_IN            (0x82U)
 
-#define USBD_STR_0 (0x00)
-#define USBD_STR_MANUF (0x01)
-#define USBD_STR_PRODUCT (0x02)
-#define USBD_STR_SERIAL (0x03)
-#define USBD_STR_CDC (0x04)
+#define USBD_CDC_1_EP_CMD           (0x83U)
+#define USBD_CDC_1_EP_OUT           (0x04U)
+#define USBD_CDC_1_EP_IN            (0x84U)
+
+#define USBD_CDC_CMD_MAX_SIZE       (8U)
+#define USBD_CDC_IN_OUT_MAX_SIZE    (64U)
+
+#define USBD_STR_0                  (0x00)
+#define USBD_STR_MANUF              (0x01U)
+#define USBD_STR_PRODUCT            (0x02U)
+#define USBD_STR_SERIAL             (0x03U)
+#define USBD_STR_CDC                (0x04U)
 
 // Note: descriptors returned from callbacks must exist long enough for transfer to complete
 
@@ -71,12 +77,15 @@ static const tusb_desc_device_t usbd_desc_device = {
     .bNumConfigurations = 1,
 };
 
-static const uint8_t usbd_desc_cfg[USBD_DESC_LEN] = {
-    TUD_CONFIG_DESCRIPTOR(1, USBD_ITF_MAX, USBD_STR_0, USBD_DESC_LEN,
-        0, USBD_MAX_POWER_MA),
+static const uint8_t usbd_desc_cfg[] = {
+    // Config number, interface count, string index, total length, attribute, power in mA
+    TUD_CONFIG_DESCRIPTOR(1, USBD_ITF_MAX, USBD_STR_0, USBD_DESC_LEN, 0, USBD_MAX_POWER_MA),
 
-    TUD_CDC_DESCRIPTOR(USBD_ITF_CDC, USBD_STR_CDC, USBD_CDC_EP_CMD,
-        USBD_CDC_CMD_MAX_SIZE, USBD_CDC_EP_OUT, USBD_CDC_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
+    // 1st CDC: Interface number, string index, EP notification address and size, EP data address (out, in) and size.
+    TUD_CDC_DESCRIPTOR(USBD_ITF_CDC_0, USBD_STR_CDC, USBD_CDC_0_EP_CMD, USBD_CDC_CMD_MAX_SIZE, USBD_CDC_0_EP_OUT, USBD_CDC_0_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
+
+    // 2nd CDC: Interface number, string index, EP notification address and size, EP data address (out, in) and size.
+    TUD_CDC_DESCRIPTOR(USBD_ITF_CDC_1, USBD_STR_CDC, USBD_CDC_1_EP_CMD, USBD_CDC_CMD_MAX_SIZE, USBD_CDC_1_EP_OUT, USBD_CDC_1_EP_IN, USBD_CDC_IN_OUT_MAX_SIZE),
 };
 
 static const char *const usbd_desc_str[] = {
