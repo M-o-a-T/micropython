@@ -18,8 +18,7 @@ async def handle_connection(reader, writer):
 
     data = await reader.read(100)
     print("echo:", data)
-    writer.write(data)
-    await writer.drain()
+    await writer.write(data)
 
     print("close")
     writer.close()
@@ -42,8 +41,7 @@ async def tcp_server():
 async def tcp_client(message):
     reader, writer = await asyncio.open_connection(IP, PORT)
     print("write:", message)
-    writer.write(message)
-    await writer.drain()
+    await writer.write(message)
     data = await reader.read(100)
     print("read:", data)
 

@@ -14,8 +14,7 @@ async def http_get_headers(url):
     reader, writer = await asyncio.open_connection(url, 80)
 
     print("write GET")
-    writer.write(b"GET / HTTP/1.0\r\n\r\n")
-    await writer.drain()
+    await writer.write(b"GET / HTTP/1.0\r\n\r\n")
 
     while True:
         line = await reader.readline()

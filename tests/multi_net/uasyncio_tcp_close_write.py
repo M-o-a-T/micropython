@@ -14,8 +14,7 @@ PORT = 8000
 
 async def handle_connection(reader, writer):
     # Write data to ensure connection
-    writer.write(b"x")
-    await writer.drain()
+    await writer.write(b"x")
 
     # Read, should return nothing
     print("read:", await reader.read(100))
@@ -53,8 +52,7 @@ async def tcp_client():
     # Try writing data to the closed connection
     print("write")
     try:
-        writer.write(b"x")
-        await writer.drain()
+        await writer.write(b"x")
     except OSError:
         print("OSError")
 

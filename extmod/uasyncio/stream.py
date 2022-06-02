@@ -8,7 +8,6 @@ class Stream:
     def __init__(self, s, e={}):
         self.s = s
         self.e = e
-        self.out_buf = b""
 
     def get_extra_info(self, v):
         return self.e[v]
@@ -55,18 +54,14 @@ class Stream:
             if not l2 or l[-1] == 10:  # \n (check l in case l2 is str)
                 return l
 
-    def write(self, buf):
-        self.out_buf += buf
-
-    async def drain(self):
-        mv = memoryview(self.out_buf)
+    async def write(self, buf):
+        mv = memoryview(buf)
         off = 0
         while off < len(mv):
             yield core._io_queue.queue_write(self.s)
             ret = self.s.write(mv[off:])
             if ret is not None:
                 off += ret
-        self.out_buf = b""
 
 
 # Stream can be used for both reading and writing to save code size
@@ -155,8 +150,7 @@ async def stream_awrite(self, buf, off=0, sz=-1):
         if sz == -1:
             sz = len(buf)
         buf = buf[off : off + sz]
-    self.write(buf)
-    await self.drain()
+    await self.write(buf)
 
 
 Stream.aclose = Stream.wait_closed

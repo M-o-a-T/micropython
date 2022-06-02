@@ -22,11 +22,9 @@ PORT = 8000
 
 
 async def handle_connection(reader, writer):
-    writer.write(b"ab")
-    await writer.drain()
+    await writer.write(b"ab")
 
-    writer.write(b"c")
-    await writer.drain()
+    await writer.write(b"c")
 
     print("close")
     writer.close()
