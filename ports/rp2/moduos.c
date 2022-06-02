@@ -25,6 +25,9 @@
  */
 
 #include "py/runtime.h"
+#include "py/mphal.h"
+
+extern ringbuf_t stdin_ringbuf;
 
 uint8_t rosc_random_u8(size_t cycles);
 
@@ -38,3 +41,23 @@ STATIC mp_obj_t mp_uos_urandom(mp_obj_t num) {
     return mp_obj_new_str_from_vstr(&mp_type_bytes, &vstr);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mp_uos_urandom_obj, mp_uos_urandom);
+
+#if MICROPY_PY_UOS_DUPTERM_NOTIFY
+STATIC mp_obj_t mp_uos_dupterm_notify(mp_obj_t obj_in) {
+    (void)obj_in;
+    for (;;) {
+        int c = mp_uos_dupterm_rx_chr();
+        if (c < 0) {
+            break;
+        }
+        if (c == mp_interrupt_char) {
+            mp_sched_keyboard_interrupt();
+        } else {
+            ringbuf_put(&stdin_ringbuf, c);
+        }
+    }
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(mp_uos_dupterm_notify_obj, mp_uos_dupterm_notify);
+#endif
+
