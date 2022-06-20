@@ -14,8 +14,10 @@ _attrs = {
     "Lock": "lock",
     "open_connection": "stream",
     "start_server": "stream",
+    "run_server": "stream",
     "StreamReader": "stream",
     "StreamWriter": "stream",
+    "TaskGroup": "taskgroup",
 }
 
 
@@ -25,7 +27,8 @@ _attrs = {
 def __getattr__(attr):
     mod = _attrs.get(attr, None)
     if mod is None:
-        raise AttributeError(attr)
-    value = getattr(__import__(mod, None, None, True, 1), attr)
+        value = __import__(attr, None, None, True, 1)
+    else:
+        value = getattr(__import__(mod, None, None, True, 1), attr)
     globals()[attr] = value
     return value
