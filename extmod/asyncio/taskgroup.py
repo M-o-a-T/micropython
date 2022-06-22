@@ -6,7 +6,6 @@ __all__ = ["TaskGroup"]
 
 from . import core
 from . import event
-from . import task
 
 DEBUG = False
 
