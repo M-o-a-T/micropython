@@ -116,3 +116,7 @@
 // Enable the "machine" module, mostly for machine.mem*.
 #define MICROPY_PY_MACHINE             (1)
 #define MICROPY_PY_MACHINE_PULSE       (1)
+
+// Include asyncio in Unix builds.
+#define MICROPY_PY_ASYNCIO             (1)
+
