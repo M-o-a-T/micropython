@@ -77,7 +77,7 @@ STATIC mp_uint_t stdio_read(mp_obj_t self_in, void *buf, mp_uint_t size, int *er
 STATIC mp_uint_t stdio_write(mp_obj_t self_in, const void *buf, mp_uint_t size, int *errcode) {
     sys_stdio_obj_t *self = MP_OBJ_TO_PTR(self_in);
     if (self->fd == STDIO_FD_OUT || self->fd == STDIO_FD_ERR) {
-        mp_hal_stdout_tx_strn_cooked(buf, size);
+        mp_hal_stdout_tx_strn(buf, size);
         return size;
     } else {
         *errcode = MP_EPERM;

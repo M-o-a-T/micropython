@@ -202,11 +202,6 @@ void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
     }
 }
 
-void mp_hal_stdout_tx_strn_cooked(const char *str, mp_uint_t len) {
-    if (MP_STATE_PORT(board_stdio_uart) != NULL) {
-        uart_tx_strn_cooked(MP_STATE_PORT(board_stdio_uart), str, len);
-    }
-}
 #endif
 
 void mp_hal_stdout_tx_str(const char *str) {

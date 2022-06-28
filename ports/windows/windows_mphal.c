@@ -227,10 +227,6 @@ void mp_hal_stdout_tx_strn(const char *str, size_t len) {
     MP_THREAD_GIL_ENTER();
 }
 
-void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) {
-    mp_hal_stdout_tx_strn(str, len);
-}
-
 void mp_hal_stdout_tx_str(const char *str) {
     mp_hal_stdout_tx_strn(str, strlen(str));
 }

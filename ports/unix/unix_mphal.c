@@ -190,11 +190,6 @@ void mp_hal_stdout_tx_strn(const char *str, size_t len) {
     mp_uos_dupterm_tx_strn(str, len);
 }
 
-// cooked is same as uncooked because the terminal does some postprocessing
-void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) {
-    mp_hal_stdout_tx_strn(str, len);
-}
-
 void mp_hal_stdout_tx_str(const char *str) {
     mp_hal_stdout_tx_strn(str, strlen(str));
 }

@@ -148,15 +148,6 @@ void ble_uart_tx_char(char c) {
                           (uint8_t *)&c);
 }
 
-void mp_hal_stdout_tx_strn_cooked(const char *str, mp_uint_t len) {
-    for (const char *top = str + len; str < top; str++) {
-        if (*str == '\n') {
-            ble_uart_tx_char('\r');
-        }
-        ble_uart_tx_char(*str);
-    }
-}
-
 #if MICROPY_PY_SYS_STDFILES
 uintptr_t mp_hal_stdio_poll(uintptr_t poll_flags) {
     uintptr_t ret = 0;

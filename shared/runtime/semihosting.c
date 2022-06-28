@@ -114,19 +114,3 @@ uint32_t mp_semihosting_tx_strn(const char *str, size_t len) {
     return mp_semihosting_call(SYS_WRITE, &args);
 }
 
-uint32_t mp_semihosting_tx_strn_cooked(const char *str, size_t len) {
-    // Write chunks of data until (excluding) the first '\n' character,
-    // insert a '\r' character, and then continue with the next chunk
-    // (starting with '\n').
-    // Doing byte-by-byte writes would be easier to implement but is far
-    // too slow.
-    size_t start = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (str[i] == '\n') {
-            mp_semihosting_tx_strn(str + start, i - start);
-            mp_semihosting_tx_char('\r');
-            start = i;
-        }
-    }
-    return mp_semihosting_tx_strn(str + start, len - start);
-}

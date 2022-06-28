@@ -131,12 +131,3 @@ static inline void uart_write_char(int c) {
     UART4->DR = c;
 }
 
-// Send string of given length to stdout, converting \n to \r\n.
-void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) {
-    while (len--) {
-        if (*str == '\n') {
-            uart_write_char('\r');
-        }
-        uart_write_char(*str++);
-    }
-}
