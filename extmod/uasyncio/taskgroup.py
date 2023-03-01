@@ -69,12 +69,6 @@ class TaskGroup:
                 # Otherwise the main task raised an error.
                 self._abort()
 
-            # Tasks that didn't yet enter our _run_task wrapper
-            # get cancelled off immediately
-            for task in self._pending:
-                task.cancel()
-                self._tasks.discard(task)
-        # We use while-loop here because "self._on_completed"
         # can be cancelled multiple times if our parent task
         # is being cancelled repeatedly (or even once, when
         # our own cancellation is already in progress)
@@ -160,6 +154,13 @@ class TaskGroup:
 
     def _abort(self):
         self._state = _s_aborting
+
+        # Tasks that didn't yet enter our _run_task wrapper
+        # get cancelled off directly
+        for t in self._pending:
+            t.cancel()
+            self._tasks.discard(t)
+        self._pending = set()
 
         for t in self._tasks:
             if t is not core.cur_task and not t.done():
