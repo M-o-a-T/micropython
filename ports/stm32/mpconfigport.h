@@ -65,7 +65,7 @@
 #endif
 
 // Python internal features
-#define MICROPY_TRACKED_ALLOC       (MICROPY_SSL_MBEDTLS)
+#define MICROPY_TRACKED_ALLOC       (MICROPY_SSL_MBEDTLS || MICROPY_BLUETOOTH_BTSTACK)
 #define MICROPY_READER_VFS          (1)
 #define MICROPY_ENABLE_GC           (1)
 #define MICROPY_ENABLE_EMERGENCY_EXCEPTION_BUF (1)
@@ -289,6 +289,10 @@ static inline mp_uint_t disable_irq(void) {
 #define MICROPY_PY_LWIP_ENTER   MICROPY_PY_PENDSV_ENTER
 #define MICROPY_PY_LWIP_REENTER MICROPY_PY_PENDSV_REENTER
 #define MICROPY_PY_LWIP_EXIT    MICROPY_PY_PENDSV_EXIT
+
+#ifndef MICROPY_PY_NETWORK_HOSTNAME_DEFAULT
+#define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "mpy-stm32"
+#endif
 
 #if MICROPY_PY_BLUETOOTH_USE_SYNC_EVENTS
 // Bluetooth code only runs in the scheduler, no locking/mutex required.
