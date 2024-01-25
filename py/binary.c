@@ -155,7 +155,8 @@ size_t mp_binary_get_size(char struct_type, char val_type, size_t *palign) {
     return size;
 }
 
-#if MICROPY_PY_BUILTINS_FLOAT
+#if MICROPY_PY_BUILTINS_FLOAT && !defined(FLT16_MAX)
+
 static float mp_decode_half(uint16_t hf) {
     union {
         uint32_t i;
@@ -206,7 +207,6 @@ static uint16_t mp_encode_half(float x) {
     bits = ((fpu.i >> 16) & 0x8000) | (e << 10) | m;
     return bits;
 }
-
 
 #endif
 
@@ -309,7 +309,15 @@ mp_obj_t mp_binary_get_val(char struct_type, char val_type, byte *p_base, byte *
         return mp_obj_new_str(s_val, strlen(s_val));
     #if MICROPY_PY_BUILTINS_FLOAT
     } else if (val_type == 'e') {
+        #ifdef FLT16_MAX
+        union {
+            uint16_t i;
+            _Float16 f;
+        } fpu = {val};
+        return mp_obj_new_float_from_f(fpu.f);
+        #else
         return mp_obj_new_float_from_f(mp_decode_half(val));
+        #endif
     } else if (val_type == 'f') {
         union {
             uint32_t i;
@@ -380,7 +388,17 @@ void mp_binary_set_val(char struct_type, char val_type, mp_obj_t val_in, byte *p
             break;
         #if MICROPY_PY_BUILTINS_FLOAT
         case 'e':
+            #ifdef FLT16_MAX
+            union {
+                uint16_t i;
+                _Float16 f;
+            } fp_sp;
+            fp_sp.f = mp_obj_get_float_to_f(val_in);
+            val = fp_sp.i;
+            break;
+            #else
             val = mp_encode_half(mp_obj_get_float_to_f(val_in));
+            #endif
             break;
         case 'f': {
             union {
