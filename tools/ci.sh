@@ -39,12 +39,18 @@ function ci_c_code_formatting_run {
 # commit formatting
 
 function ci_commit_formatting_run {
-    git remote add upstream https://github.com/micropython/micropython.git
-    git fetch --depth=100 upstream master
+    # Default GitHub Actions checkout for a PR is a generated merge commit where
+    # the parents are the head of base branch (i.e. master) and the head of the
+    # PR branch, respectively. Use these parents to find the merge-base (i.e.
+    # where the PR branch head was branched)
+
     # If the common ancestor commit hasn't been found, fetch more.
-    git merge-base upstream/master HEAD || git fetch --unshallow upstream master
-    # For a PR, upstream/master..HEAD ends with a merge commit into master, exclude that one.
-    tools/verifygitlog.py -v upstream/master..HEAD --no-merges
+    git merge-base HEAD^1 HEAD^2 || git fetch --unshallow origin
+
+    MERGE_BASE=$(git merge-base HEAD^1 HEAD^2)
+    HEAD=$(git rev-parse HEAD^2)
+    echo "Checking commits between merge base ${MERGE_BASE} and PR head ${HEAD}..."
+    tools/verifygitlog.py -v "${MERGE_BASE}..${HEAD}"
 }
 
 ########################################################################################
@@ -63,25 +69,37 @@ function ci_code_size_build {
     PORTS_TO_CHECK=bmusxpdv
     SUBMODULES="lib/asf4 lib/berkeley-db-1.xx lib/btstack lib/cyw43-driver lib/lwip lib/mbedtls lib/micropython-lib lib/nxp_driver lib/pico-sdk lib/stm32lib lib/tinyusb"
 
-    # starts off at either the ref/pull/N/merge FETCH_HEAD, or the current branch HEAD
-    git checkout -b pull_request # save the current location
-    git remote add upstream https://github.com/micropython/micropython.git
-    git fetch --depth=100 upstream master
-    # If the common ancestor commit hasn't been found, fetch more.
-    git merge-base upstream/master HEAD || git fetch --unshallow upstream master
+    # Default GitHub pull request sets HEAD to a generated merge commit
+    # between PR branch (HEAD^2) and base branch (i.e. master) (HEAD^1).
+    #
+    # We want to compare this generated commit with the base branch, to see what
+    # the code size impact would be if we merged this PR.
+    REFERENCE=$(git rev-parse --short HEAD^1)
+    COMPARISON=$(git rev-parse --short HEAD)
+
+    echo "Comparing sizes of reference ${REFERENCE} to ${COMPARISON}..."
+    git log --oneline $REFERENCE..$COMPARISON
+
+    function code_size_build_step {
+        COMMIT=$1
+        OUTFILE=$2
+        IGNORE_ERRORS=$3
+
+        echo "Building ${COMMIT}..."
+        git checkout --detach $COMMIT
+        git submodule update --init $SUBMODULES
+        git show -s
+        tools/metrics.py clean $PORTS_TO_CHECK
+        tools/metrics.py build $PORTS_TO_CHECK | tee $OUTFILE || $IGNORE_ERRORS
+    }
+
     # build reference, save to size0
     # ignore any errors with this build, in case master is failing
-    git checkout `git merge-base --fork-point upstream/master pull_request`
-    git submodule update --init $SUBMODULES
-    git show -s
-    tools/metrics.py clean $PORTS_TO_CHECK
-    tools/metrics.py build $PORTS_TO_CHECK | tee ~/size0 || true
+    code_size_build_step $REFERENCE ~/size0 true
     # build PR/branch, save to size1
-    git checkout pull_request
-    git submodule update --init $SUBMODULES
-    git log upstream/master..HEAD
-    tools/metrics.py clean $PORTS_TO_CHECK
-    tools/metrics.py build $PORTS_TO_CHECK | tee ~/size1
+    code_size_build_step $COMPARISON ~/size1 false
+
+    unset -f code_size_build_step
 }
 
 ########################################################################################
@@ -309,6 +327,8 @@ function ci_rp2_build {
     make ${MAKEOPTS} -C ports/rp2
     make ${MAKEOPTS} -C ports/rp2 BOARD=RPI_PICO_W submodules
     make ${MAKEOPTS} -C ports/rp2 BOARD=RPI_PICO_W USER_C_MODULES=../../examples/usercmodule/micropython.cmake
+    make ${MAKEOPTS} -C ports/rp2 BOARD=RPI_PICO2 submodules
+    make ${MAKEOPTS} -C ports/rp2 BOARD=RPI_PICO2
     make ${MAKEOPTS} -C ports/rp2 BOARD=W5100S_EVB_PICO submodules
     make ${MAKEOPTS} -C ports/rp2 BOARD=W5100S_EVB_PICO
 
@@ -631,9 +651,6 @@ function ci_unix_settrace_stackless_run_tests {
 }
 
 function ci_unix_macos_build {
-    # Install pkg-config to configure libffi paths.
-    brew install pkg-config
-
     make ${MAKEOPTS} -C mpy-cross
     make ${MAKEOPTS} -C ports/unix submodules
     #make ${MAKEOPTS} -C ports/unix deplibs
@@ -665,10 +682,8 @@ function ci_unix_qemu_mips_build {
 }
 
 function ci_unix_qemu_mips_run_tests {
-    # Issues with MIPS tests:
-    # - (i)listdir does not work, it always returns the empty list (it's an issue with the underlying C call)
     file ./ports/unix/build-coverage/micropython
-    (cd tests && MICROPY_MICROPYTHON=../ports/unix/build-coverage/micropython ./run-tests.py --exclude 'vfs_posix.*\.py')
+    (cd tests && MICROPY_MICROPYTHON=../ports/unix/build-coverage/micropython ./run-tests.py)
 }
 
 function ci_unix_qemu_arm_setup {
@@ -727,19 +742,32 @@ function ci_windows_build {
 ########################################################################################
 # ports/zephyr
 
-ZEPHYR_DOCKER_VERSION=v0.21.0
-ZEPHYR_SDK_VERSION=0.13.2
-ZEPHYR_VERSION=v3.1.0
+ZEPHYR_DOCKER_VERSION=v0.26.13
+ZEPHYR_SDK_VERSION=0.16.8
+ZEPHYR_VERSION=v3.7.0
 
 function ci_zephyr_setup {
-    docker pull zephyrprojectrtos/ci:${ZEPHYR_DOCKER_VERSION}
+    IMAGE=ghcr.io/zephyrproject-rtos/ci:${ZEPHYR_DOCKER_VERSION}
+
+    docker pull ${IMAGE}
+
+    # Directories cached by GitHub Actions, mounted
+    # into the container
+    ZEPHYRPROJECT_DIR="$(pwd)/zephyrproject"
+    CCACHE_DIR="$(pwd)/.ccache"
+
+    mkdir -p "${ZEPHYRPROJECT_DIR}"
+    mkdir -p "${CCACHE_DIR}"
+
     docker run --name zephyr-ci -d -it \
       -v "$(pwd)":/micropython \
+      -v "${ZEPHYRPROJECT_DIR}":/zephyrproject \
+      -v "${CCACHE_DIR}":/root/.cache/ccache \
       -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-${ZEPHYR_SDK_VERSION} \
       -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
       -e ZEPHYR_BASE=/zephyrproject/zephyr \
       -w /micropython/ports/zephyr \
-      zephyrprojectrtos/ci:${ZEPHYR_DOCKER_VERSION}
+      ${IMAGE}
     docker ps -a
 
     # qemu-system-arm is needed to run the test suite.
@@ -765,5 +793,5 @@ function ci_zephyr_run_tests {
     docker exec zephyr-ci west build -p auto -b qemu_cortex_m3 -- -DCONF_FILE=prj_minimal.conf
     # Issues with zephyr tests:
     # - inf_nan_arith fails pow(-1, nan) test
-    (cd tests && ./run-tests.py --target minimal --device execpty:"qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -nographic -monitor null -serial pty -kernel ../ports/zephyr/build/zephyr/zephyr.elf" -d basics float --exclude inf_nan_arith)
+    (cd tests && ./run-tests.py -t execpty:"qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -nographic -monitor null -serial pty -kernel ../ports/zephyr/build/zephyr/zephyr.elf" -d basics float --exclude inf_nan_arith)
 }
