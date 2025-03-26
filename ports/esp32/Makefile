@@ -72,8 +72,7 @@ HELP_BUILD_ERROR ?= "See \033[1;31mhttps://github.com/micropython/micropython/wi
 IDF ?= idf.py
 
 define RUN_IDF_PY
-	# $(IDF) $(IDFPY_FLAGS) -B $(BUILD) -p $(PORT) -b $(BAUD) $(1)
-	$(IDF) $(IDFPY_FLAGS) -B $(BUILD) $(1)
+	$(IDF) $(IDFPY_FLAGS) -B $(BUILD) -p $(PORT) -b $(BAUD) $(1)
 endef
 
 all:
