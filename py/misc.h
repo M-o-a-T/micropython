@@ -411,11 +411,6 @@ static inline uint32_t mp_ctz(uint32_t x) {
     return _BitScanForward(&tz, x) ? tz : 0;
 }
 
-// Workaround for 'warning C4127: conditional expression is constant'.
-static inline bool mp_check(bool value) {
-    return value;
-}
-
 static inline uint32_t mp_popcount(uint32_t x) {
     return __popcnt(x);
 }
@@ -424,7 +419,6 @@ static inline uint32_t mp_popcount(uint32_t x) {
 #define mp_clzl(x) __builtin_clzl(x)
 #define mp_clzll(x) __builtin_clzll(x)
 #define mp_ctz(x) __builtin_ctz(x)
-#define mp_check(x) (x)
 #if __has_builtin(__builtin_popcount)
 #define mp_popcount(x) __builtin_popcount(x)
 #else
@@ -557,6 +551,32 @@ static inline bool mp_sub_ll_overflow(long long int lhs, long long int rhs, long
 
 #ifndef MP_SANITIZER_BUILD
 #define MP_SANITIZER_BUILD (MP_UBSAN || MP_ASAN)
+#endif
+
+// halfword/word/longword swapping macros
+
+#if __has_builtin(__builtin_bswap16)
+#define MP_BSWAP16(x) __builtin_bswap16(x)
+#else
+#define MP_BSWAP16(x) ((uint16_t)((((x) & 0xFF) << 8) | (((x) >> 8) & 0xFF)))
+#endif
+
+#if __has_builtin(__builtin_bswap32)
+#define MP_BSWAP32(x) __builtin_bswap32(x)
+#else
+#define MP_BSWAP32(x) \
+    ((uint32_t)((((x) & 0xFF) << 24) | (((x) & 0xFF00) << 8) | \
+    (((x) >> 8) & 0xFF00) | (((x) >> 24) & 0xFF)))
+#endif
+
+#if __has_builtin(__builtin_bswap64)
+#define MP_BSWAP64(x) __builtin_bswap64(x)
+#else
+#define MP_BSWAP64(x) \
+    ((uint64_t)((((x) & 0xFF) << 56) | (((x) & 0xFF00) << 40) | \
+    (((x) & 0xFF0000) << 24) | (((x) & 0xFF000000) << 8) | \
+    (((x) >> 8) & 0xFF000000) | (((x) >> 24) & 0xFF0000) | \
+    (((x) >> 40) & 0xFF00) | (((x) >> 56) & 0xFF)))
 #endif
 
 #endif // MICROPY_INCLUDED_PY_MISC_H

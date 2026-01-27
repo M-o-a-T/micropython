@@ -22,7 +22,10 @@ TEST_TIMEOUT = float(os.environ.get("MICROPY_TEST_TIMEOUT", 30))
 # are guaranteed to always work, this one should though.
 BASEPATH = os.path.dirname(os.path.abspath(inspect.getsourcefile(lambda: None)))
 
-RV32_ARCH_FLAGS = {"zba": 1 << 0}
+RV32_ARCH_FLAGS = {
+    "zba": 1 << 0,
+    "zcmp": 1 << 1,
+}
 
 
 def base_path(*p):
@@ -161,10 +164,8 @@ emitter_tests_to_skip = {
         "basics/exception_chain.py",
         # These require stack-allocated slice optimisation.
         "micropython/heapalloc_slice.py",
-        # These require running the scheduler.
+        # These require implicitly running the scheduler between bytecodes.
         "micropython/schedule.py",
-        "extmod/asyncio_event_queue.py",
-        "extmod/asyncio_iterator_event.py",
         # These require sys.exc_info().
         "misc/sys_exc_info.py",
         # These require sys.settrace().
@@ -180,6 +181,9 @@ emitter_tests_to_skip = {
 # Tests to skip on specific targets.
 # These are tests that are difficult to detect that they should not be run on the given target.
 platform_tests_to_skip = {
+    "esp8266": (
+        "stress/list_sort.py",  # watchdog kicks in because it takes too long
+    ),
     "minimal": (
         "basics/class_inplace_op.py",  # all special methods not supported
         "basics/subclass_native_init.py",  # native subclassing corner cases not support
@@ -947,10 +951,15 @@ def run_tests(pyb, tests, args, result_dir, num_threads=1):
                 skip_tests.add("inlineasm/thumb/asmfpsqrt.py")
 
         if args.inlineasm_arch == "rv32":
-            # Check if @micropython.asm_rv32 supports Zba instructions, and skip such tests if it doesn't
-            output = run_feature_check(pyb, args, "inlineasm_rv32_zba.py")
-            if output != b"rv32_zba\n":
-                skip_tests.add("inlineasm/rv32/asmzba.py")
+            # Discover extension-specific inlineasm tests and add them to the
+            # list of tests to run if applicable.
+            for extension in RV32_ARCH_FLAGS:
+                try:
+                    output = run_feature_check(pyb, args, "inlineasm_rv32_{}.py".format(extension))
+                    if output.strip() != "rv32_{}".format(extension).encode():
+                        skip_tests.add("inlineasm/rv32/asm_ext_{}.py".format(extension))
+                except FileNotFoundError:
+                    pass
 
         # Check if emacs repl is supported, and skip such tests if it's not
         t = run_feature_check(pyb, args, "repl_emacs_check.py")
@@ -974,8 +983,6 @@ def run_tests(pyb, tests, args, result_dir, num_threads=1):
 
     # Some tests shouldn't be run on GitHub Actions
     if os.getenv("GITHUB_ACTIONS") == "true":
-        skip_tests.add("thread/stress_schedule.py")  # has reliability issues
-
         if os.getenv("RUNNER_OS") == "Windows" and os.getenv("CI_BUILD_CONFIGURATION") == "Debug":
             # fails with stack overflow on Debug builds
             skip_tests.add("misc/sys_settrace_features.py")
@@ -1008,6 +1015,7 @@ def run_tests(pyb, tests, args, result_dir, num_threads=1):
     if not has_complex:
         skip_tests.add("float/complex1.py")
         skip_tests.add("float/complex1_intbig.py")
+        skip_tests.add("float/complex1_micropython.py")
         skip_tests.add("float/complex_reverse_op.py")
         skip_tests.add("float/complex_special_methods.py")
         skip_tests.add("float/int_big_float.py")
