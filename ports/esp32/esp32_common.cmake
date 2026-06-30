@@ -23,7 +23,7 @@ if(CONFIG_IDF_TARGET_ARCH_RISCV)
 endif()
 
 if(NOT DEFINED MICROPY_PY_TINYUSB)
-    if(CONFIG_IDF_TARGET_ESP32S2 OR CONFIG_IDF_TARGET_ESP32S3)
+    if(CONFIG_IDF_TARGET_ESP32S2 OR CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4)
         set(MICROPY_PY_TINYUSB ON)
     endif()
 endif()
@@ -98,9 +98,13 @@ if(MICROPY_PY_TINYUSB)
         ${MICROPY_DIR}/shared/tinyusb/
     )
 
-    list(APPEND MICROPY_LINK_TINYUSB
-        -Wl,--wrap=dcd_event_handler
-    )
+    # Build the Espressif tinyusb component with MicroPython shared/tinyusb/tusb_config.h
+    idf_component_get_property(tusb_lib espressif__tinyusb COMPONENT_LIB)
+    target_include_directories(${tusb_lib} PRIVATE
+        ${MICROPY_DIR}/shared/tinyusb
+        ${MICROPY_DIR}
+        ${MICROPY_PORT_DIR}
+        ${MICROPY_BOARD_DIR})
 endif()
 
 list(APPEND MICROPY_SOURCE_PORT
@@ -131,6 +135,7 @@ list(APPEND MICROPY_SOURCE_PORT
     modesp.c
     esp32_nvs.c
     esp32_partition.c
+    esp32_pcnt.c
     esp32_rmt.c
     esp32_ulp.c
     modesp32.c
@@ -161,7 +166,9 @@ list(APPEND IDF_COMPONENTS
     driver
     esp_adc
     esp_app_format
+    esp_mm
     esp_common
+    esp_driver_touch_sens
     esp_eth
     esp_event
     esp_hw_support
@@ -237,7 +244,11 @@ set(MICROPY_TARGET ${COMPONENT_TARGET})
 if(CONFIG_IDF_TARGET_ARCH_XTENSA)
     set(MICROPY_CROSS_FLAGS -march=xtensawin)
 elseif(CONFIG_IDF_TARGET_ARCH_RISCV)
-    set(MICROPY_CROSS_FLAGS -march=rv32imc)
+    if (CONFIG_IDF_TARGET_ESP32P4)
+        set(MICROPY_CROSS_FLAGS "-march=rv32imc -march-flags=zcmp")
+    else()
+        set(MICROPY_CROSS_FLAGS -march=rv32imc)
+    endif()
 endif()
 
 # Set compile options for this port.
@@ -261,18 +272,22 @@ target_compile_options(${MICROPY_TARGET} PUBLIC
     -Wno-missing-field-initializers
 )
 
-target_link_options(${MICROPY_TARGET} PUBLIC
-     ${MICROPY_LINK_TINYUSB}
-)
-
 # Additional include directories needed for private NimBLE headers.
 target_include_directories(${MICROPY_TARGET} PUBLIC
     ${IDF_PATH}/components/bt/host/nimble/nimble
 )
+if (IDF_VERSION VERSION_LESS "5.3")
+# Additional include directories needed for private RMT header.
+#  IDF 5.x versions before 5.3.1
+  message(STATUS "Using private rmt headers for ${IDF_VERSION}")
+  target_include_directories(${MICROPY_TARGET} PRIVATE
+    ${IDF_PATH}/components/driver/rmt
+  )
+endif()
 
 # Add additional extmod and usermod components.
 if (MICROPY_PY_BTREE)
-    target_link_libraries(${MICROPY_TARGET} micropy_extmod_btree)
+    target_link_libraries(${MICROPY_TARGET} $<TARGET_OBJECTS:micropy_extmod_btree>)
 endif()
 target_link_libraries(${MICROPY_TARGET} usermod)
 

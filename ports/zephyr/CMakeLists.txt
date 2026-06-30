@@ -30,9 +30,12 @@ project(micropython)
 set(MICROPY_PORT_DIR    ${CMAKE_CURRENT_SOURCE_DIR})
 set(MICROPY_DIR         ${MICROPY_PORT_DIR}/../..)
 set(MICROPY_TARGET      micropython)
+string(TOUPPER          ZEPHYR_${BOARD} MICROPY_BOARD)
 
 include(${MICROPY_DIR}/py/py.cmake)
 include(${MICROPY_DIR}/extmod/extmod.cmake)
+
+list(APPEND DTS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/dts)
 
 if (CONFIG_MICROPY_FROZEN_MODULES)
     cmake_path(ABSOLUTE_PATH CONFIG_MICROPY_FROZEN_MANIFEST BASE_DIRECTORY ${CMAKE_CURRENT_LIST_DIR})
@@ -54,6 +57,7 @@ set(MICROPY_SOURCE_PORT
     uart_core.c
     zephyr_device.c
     zephyr_storage.c
+    zephyr_filesystem.c
     mpthreadport.c
 )
 list(TRANSFORM MICROPY_SOURCE_PORT PREPEND ${MICROPY_PORT_DIR}/)
@@ -66,24 +70,54 @@ set(MICROPY_SOURCE_SHARED
     runtime/mpirq.c
     runtime/pyexec.c
     runtime/stdout_helpers.c
+    runtime/sys_stdio_mphal.c
     timeutils/timeutils.c
 )
 list(TRANSFORM MICROPY_SOURCE_SHARED PREPEND ${MICROPY_DIR}/shared/)
 
-set(MICROPY_SOURCE_LIB
+set(MICROPY_SOURCE_DRIVERS
+    bus/softspi.c
+)
+list(TRANSFORM MICROPY_SOURCE_DRIVERS PREPEND ${MICROPY_DIR}/drivers/)
+
+set(MICROPY_QSTRDEFS_PORT
+    ${MICROPY_PORT_DIR}/qstrdefsport.h
+)
+
+if (CONFIG_MICROPY_VFS_FAT)
+
+list(APPEND MICROPY_SOURCE_LIB
     oofatfs/ff.c
     oofatfs/ffunicode.c
+)
+
+endif()
+
+if (CONFIG_MICROPY_VFS_LFS1)
+
+list(APPEND MICROPY_SOURCE_LIB
     littlefs/lfs1.c
     littlefs/lfs1_util.c
+)
+
+endif()
+
+if (CONFIG_MICROPY_VFS_LFS2)
+
+list(APPEND MICROPY_SOURCE_LIB
     littlefs/lfs2.c
     littlefs/lfs2_util.c
 )
+
+endif()
+
 list(TRANSFORM MICROPY_SOURCE_LIB PREPEND ${MICROPY_DIR}/lib/)
 
 set(MICROPY_SOURCE_QSTR
     ${MICROPY_SOURCE_PY}
     ${MICROPY_SOURCE_EXTMOD}
     ${MICROPY_SOURCE_SHARED}
+    ${MICROPY_SOURCE_DRIVERS}
     ${MICROPY_SOURCE_LIB}
     ${MICROPY_SOURCE_PORT}
 )

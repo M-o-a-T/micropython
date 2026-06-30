@@ -100,6 +100,12 @@ if(MICROPY_ROM_TEXT_COMPRESSION)
     )
 endif()
 
+# Ensure genhdr directory is removed on clean
+
+set_property(TARGET ${MICROPY_TARGET} APPEND PROPERTY ADDITIONAL_CLEAN_FILES
+    "${MICROPY_GENHDR_DIR}"
+)
+
 # Command to force the build of another command
 
 # Generate mpversion.h
@@ -244,6 +250,10 @@ add_custom_command(
 if(MICROPY_FROZEN_MANIFEST)
     set(MICROPY_FROZEN_CONTENT "${CMAKE_BINARY_DIR}/frozen_content.c")
 
+    set_property(TARGET ${MICROPY_TARGET} APPEND PROPERTY ADDITIONAL_CLEAN_FILES
+        "${CMAKE_BINARY_DIR}/frozen_mpy"
+    )
+
     target_sources(${MICROPY_TARGET} PRIVATE
         ${MICROPY_FROZEN_CONTENT}
     )
@@ -270,7 +280,7 @@ if(MICROPY_FROZEN_MANIFEST)
         endif()
         add_custom_command(
             OUTPUT ${MICROPY_MPYCROSS_DEPENDENCY}
-            COMMAND ${MICROPY_MAKE_EXECUTABLE} -C ${MICROPY_DIR}/mpy-cross USER_C_MODULES=
+            COMMAND env -u FROZEN_MANIFEST -u BUILD -u MAKEFLAGS ${MICROPY_MAKE_EXECUTABLE} -C ${MICROPY_DIR}/mpy-cross USER_C_MODULES=
         )
     endif()
 

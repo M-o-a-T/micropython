@@ -6,7 +6,7 @@ from micropython import const
 from . import core
 from . import Event
 
-_DEBUG = const(False)
+_DEBUG = False
 _s_new = const(0)
 _s_entered = const(1)
 _s_exiting = const(2)
@@ -174,12 +174,12 @@ class TaskGroup:
         self._pending.add(t)
         return t
 
-    def cancel(self):
+    def cancel(self, reason: str | None = None):
         # Extension (not in CPython): Stop a whole taskgroup
         if self._parent_task is None:
             return
         try:
-            self._parent_task.cancel()
+            self._parent_task.cancel(reason)
         except RuntimeError:
             self._abort()
             self._parent_cancel_requested = True

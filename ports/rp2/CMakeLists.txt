@@ -487,7 +487,16 @@ list(APPEND MICROPY_SOURCE_QSTR
 )
 
 # Define mpy-cross flags
-set(MICROPY_CROSS_FLAGS -march=armv6m)
+if (${PICO_PLATFORM} STREQUAL "rp2040")
+    set(MICROPY_CROSS_FLAGS "-march=armv6m")
+elseif (${PICO_PLATFORM} STREQUAL "rp2350-arm-s")
+    set(MICROPY_CROSS_FLAGS "-march=armv7m")
+elseif (${PICO_PLATFORM} STREQUAL "rp2350-riscv")
+    set(MICROPY_CROSS_FLAGS "-march=rv32imc -march-flags=zba,zcmp")
+else()
+    message(WARNING "Unknown PICO_PLATFORM version (${PICO_PLATFORM}), falling back to rp2040")
+    set(MICROPY_CROSS_FLAGS "-march=armv6m")
+endif()
 
 # Set the frozen manifest file
 if (MICROPY_USER_FROZEN_MANIFEST)
@@ -525,9 +534,22 @@ target_compile_options(${MICROPY_TARGET} PRIVATE
 
 target_link_options(${MICROPY_TARGET} PRIVATE
     -Wl,--defsym=__micropy_c_heap_size__=${MICROPY_C_HEAP_SIZE}
-    -Wl,--wrap=dcd_event_handler
     -Wl,--wrap=runtime_init_clocks
 )
+
+if(DEFINED PICO_FLASH_SIZE_BYTES)
+    target_link_options(${MICROPY_TARGET} PRIVATE
+        -Wl,--defsym=__micropy_flash_size__=${PICO_FLASH_SIZE_BYTES}
+    )
+elseif(PICO_RP2040)
+    target_link_options(${MICROPY_TARGET} PRIVATE
+        -Wl,--defsym=__micropy_flash_size__=2048k # Default to 2MB
+    )
+elseif(PICO_RP2350)
+    target_link_options(${MICROPY_TARGET} PRIVATE
+        -Wl,--defsym=__micropy_flash_size__=4096k # Default to 4MB
+    )
+endif()
 
 if(PICO_RP2350)
     target_link_options(${MICROPY_TARGET} PRIVATE
@@ -597,12 +619,16 @@ endif()
 # todo this is a bit brittle, but we want to move a few source files into RAM (which requires
 #  a linker script modification) until we explicitly add  macro calls around the function
 #  defs to move them into RAM.
-if (PICO_ON_DEVICE AND NOT PICO_NO_FLASH AND NOT PICO_COPY_TO_RAM)
+if (NOT MICROPY_BOARD_LINKER_SCRIPT)
     if(PICO_RP2040)
-        pico_set_linker_script(${MICROPY_TARGET} ${CMAKE_CURRENT_LIST_DIR}/memmap_mp_rp2040.ld)
+        set(MICROPY_BOARD_LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/memmap_mp_rp2040.ld)
     elseif(PICO_RP2350)
-        pico_set_linker_script(${MICROPY_TARGET} ${CMAKE_CURRENT_LIST_DIR}/memmap_mp_rp2350.ld)
+        set(MICROPY_BOARD_LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/memmap_mp_rp2350.ld)
     endif()
+endif()
+
+if (PICO_ON_DEVICE AND NOT PICO_NO_FLASH AND NOT PICO_COPY_TO_RAM)
+    pico_set_linker_script(${MICROPY_TARGET} ${MICROPY_BOARD_LINKER_SCRIPT})
 endif()
 
 pico_add_extra_outputs(${MICROPY_TARGET})
@@ -627,12 +653,6 @@ separate_arguments(MICROPY_CPP_FLAGS_EXTRA)
 # Include the main MicroPython cmake rules.
 include(${MICROPY_DIR}/py/mkrules.cmake)
 
-set(GEN_PINS_AF_CSV "${MICROPY_PORT_DIR}/boards/rp2_af.csv")
-set(GEN_PINS_PREFIX "${MICROPY_PORT_DIR}/boards/rp2_prefix.c")
-set(GEN_PINS_MKPINS "${MICROPY_PORT_DIR}/boards/make-pins.py")
-set(GEN_PINS_SRC "${CMAKE_BINARY_DIR}/pins_${MICROPY_BOARD}.c")
-set(GEN_PINS_HDR "${MICROPY_GENHDR_DIR}/pins.h")
-
 if(NOT PICO_NUM_GPIOS)
     set(PICO_NUM_GPIOS 30)
 endif()
@@ -641,9 +661,28 @@ if(NOT PICO_NUM_EXT_GPIOS)
     set(PICO_NUM_EXT_GPIOS 10)
 endif()
 
-if(EXISTS "${MICROPY_BOARD_DIR}/pins.csv")
-    set(GEN_PINS_BOARD_CSV "${MICROPY_BOARD_DIR}/pins.csv")
-    set(GEN_PINS_CSV_ARG --board-csv "${GEN_PINS_BOARD_CSV}")
+if(PICO_RP2040)
+    set(GEN_PINS_AF_CSV "${MICROPY_PORT_DIR}/boards/rp2040_af.csv")
+elseif(PICO_RP2350)
+    if(PICO_NUM_GPIOS EQUAL 48)
+        set(GEN_PINS_AF_CSV "${MICROPY_PORT_DIR}/boards/rp2350b_af.csv")
+    else()
+        set(GEN_PINS_AF_CSV "${MICROPY_PORT_DIR}/boards/rp2350_af.csv")
+    endif()
+endif()
+
+set(GEN_PINS_PREFIX "${MICROPY_PORT_DIR}/boards/rp2_prefix.c")
+set(GEN_PINS_MKPINS "${MICROPY_PORT_DIR}/boards/make-pins.py")
+set(GEN_PINS_SRC "${CMAKE_BINARY_DIR}/pins_${MICROPY_BOARD}.c")
+set(GEN_PINS_HDR "${MICROPY_GENHDR_DIR}/pins.h")
+
+if(NOT MICROPY_BOARD_PINS)
+    set(MICROPY_BOARD_PINS "${MICROPY_BOARD_DIR}/pins.csv")
+endif()
+
+if(EXISTS "${MICROPY_BOARD_PINS}")
+    set(GEN_PINS_BOARD_CSV "${MICROPY_BOARD_PINS}")
+    set(GEN_PINS_CSV_ARG --board-csv "${MICROPY_BOARD_PINS}")
 endif()
 
 target_sources(${MICROPY_TARGET} PRIVATE

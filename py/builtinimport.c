@@ -69,21 +69,6 @@ static mp_import_stat_t stat_path(vstr_t *path) {
     }
     #endif
     stat = mp_import_stat(str);
-    if (stat == MP_IMPORT_STAT_DIR) {
-        // check whether there's a __init__.py in there somewhere
-        int len = path->len;
-        vstr_add_str(path, PATH_SEP_CHAR "__init__.py");
-        stat = mp_import_stat(vstr_null_terminated_str(path));
-        if (stat == MP_IMPORT_STAT_NO_EXIST) {
-            path->len = len;
-            vstr_add_str(path, PATH_SEP_CHAR "__init__.mpy");
-            stat = mp_import_stat(vstr_null_terminated_str(path));
-        }
-        path->len = len;
-        if (stat == MP_IMPORT_STAT_FILE)
-            return MP_IMPORT_STAT_DIR;
-        stat = MP_IMPORT_STAT_NO_EXIST;
-    }
     return stat;
 }
 
@@ -120,7 +105,15 @@ static mp_import_stat_t stat_module(vstr_t *path) {
     mp_import_stat_t stat = stat_path(path);
     DEBUG_printf("stat %s: %d\n", vstr_str(path), stat);
     if (stat == MP_IMPORT_STAT_DIR) {
-        return stat;
+        size_t orig_path_len = path->len;
+        vstr_add_str(path, PATH_SEP_CHAR "__init__.py");
+        if (stat_file_py_or_mpy(path) == MP_IMPORT_STAT_FILE) {
+            return MP_IMPORT_STAT_FILE_PKG;
+        }
+
+        // remove __init__.py
+        path->len = orig_path_len;
+        return MP_IMPORT_STAT_DIR;
     }
 
     // Not a directory, add .py and try as a file.
@@ -128,48 +121,64 @@ static mp_import_stat_t stat_module(vstr_t *path) {
     return stat_file_py_or_mpy(path);
 }
 
+#if MICROPY_PY_SYS && MICROPY_PY_SYS_PATH
+// Helper for stat_find_module
+static void stat_build_path(vstr_t *dest, mp_obj_t *path_item, qstr mod_name) {
+    vstr_reset(dest);
+    size_t p_len;
+    const char *dot, *rest;
+    const char *p = mp_obj_str_get_data(path_item, &p_len);
+    if (p_len > 0) {
+        // Add the path separator (unless the entry is "", i.e. cwd).
+        vstr_add_strn(dest, p, p_len);
+        vstr_add_char(dest, PATH_SEP_CHAR[0]);
+    }
+    // Convert the dotted module name to a path.
+    rest = qstr_str(mod_name);
+    dot = strchr(rest, '.');
+    while (dot) {
+        vstr_add_strn(dest, rest, dot - rest);
+        vstr_add_char(dest, PATH_SEP_CHAR[0]);
+        rest = dot + 1;
+        dot = strchr(rest, '.');
+    }
+    vstr_add_str(dest, rest);
+    vstr_str(dest)[vstr_len(dest)] = 0;
+}
+#endif
+
 // Given a top-level module name, try and find it in each of the sys.path
 // entries. Note: On success, the dest argument will be updated to the matching
 // path (i.e. "<entry>/mod_name(.py)").
 static mp_import_stat_t stat_find_module(qstr mod_name, vstr_t *dest) {
     DEBUG_printf("stat_find_module: '%s'\n", qstr_str(mod_name));
-    #if MICROPY_PY_SYS
+    #if MICROPY_PY_SYS && MICROPY_PY_SYS_PATH
     size_t path_num;
     mp_obj_t *path_items;
     mp_obj_get_array(mp_sys_path, &path_num, &path_items);
 
     // go through each sys.path entry, trying to import "<entry>/<mod_name>".
+    size_t dir_idx = path_num;
     for (size_t i = 0; i < path_num; i++) {
-        vstr_reset(dest);
-        size_t p_len;
-        const char *dot, *rest;
-        const char *p = mp_obj_str_get_data(path_items[i], &p_len);
-        if (p_len > 0) {
-            // Add the path separator (unless the entry is "", i.e. cwd).
-            vstr_add_strn(dest, p, p_len);
-            vstr_add_char(dest, PATH_SEP_CHAR[0]);
-        }
-        // Convert the dotted module name to a path.
-        rest = qstr_str(mod_name);
-        dot = strchr(rest, '.');
-        while (dot) {
-            vstr_add_strn(dest, rest, dot-rest);
-            vstr_add_char(dest, PATH_SEP_CHAR[0]);
-            rest = dot+1;
-            dot = strchr(rest, '.');
-        }
-        vstr_add_str(dest, rest);
-        vstr_str(dest)[vstr_len(dest)] = 0;
-        // was: vstr_add_str(dest, qstr_str(mod_name));
+        stat_build_path(dest, path_items[i], mod_name);
         mp_import_stat_t stat = stat_module(dest);
-        if (stat != MP_IMPORT_STAT_NO_EXIST) {
+        if (stat >= MP_IMPORT_STAT_FILE) {
             return stat;
+        }
+        if (stat == MP_IMPORT_STAT_DIR && dir_idx == path_num) {
+            dir_idx = i;
         }
     }
 
-    // sys.path was empty or no matches, do not search the filesystem or
-    // frozen code.
-    return MP_IMPORT_STAT_NO_EXIST;
+    // sys.path was empty or no matches
+    if (dir_idx == path_num) {
+        return MP_IMPORT_STAT_NO_EXIST;
+    }
+    // Rebuild the path to the first directory seen, for __path__
+    if (dir_idx + 1 < path_num) {
+        stat_build_path(dest, path_items[dir_idx], mod_name);
+    }
+    return MP_IMPORT_STAT_DIR;
 
     #else
 
@@ -182,7 +191,7 @@ static mp_import_stat_t stat_find_module(qstr mod_name, vstr_t *dest) {
 
 #if MICROPY_MODULE_FROZEN_STR || MICROPY_ENABLE_COMPILER
 static void do_load_from_lexer(mp_module_context_t *context, mp_lexer_t *lex) {
-    #if MICROPY_PY___FILE__
+    #if MICROPY_MODULE___FILE__
     qstr source_name = lex->source_name;
     mp_store_attr(MP_OBJ_FROM_PTR(&context->module), MP_QSTR___file__, MP_OBJ_NEW_QSTR(source_name));
     #endif
@@ -195,7 +204,7 @@ static void do_load_from_lexer(mp_module_context_t *context, mp_lexer_t *lex) {
 
 #if (MICROPY_HAS_FILE_READER && MICROPY_PERSISTENT_CODE_LOAD) || MICROPY_MODULE_FROZEN_MPY
 static void do_execute_proto_fun(const mp_module_context_t *context, mp_proto_fun_t proto_fun, qstr source_name) {
-    #if MICROPY_PY___FILE__
+    #if MICROPY_MODULE___FILE__
     mp_store_attr(MP_OBJ_FROM_PTR(&context->module), MP_QSTR___file__, MP_OBJ_NEW_QSTR(source_name));
     #else
     (void)source_name;
@@ -254,7 +263,7 @@ static void do_load(mp_module_context_t *module_obj, vstr_t *file) {
         if (frozen_type == MP_FROZEN_MPY) {
             const mp_frozen_module_t *frozen = modref;
             module_obj->constants = frozen->constants;
-            #if MICROPY_PY___FILE__
+            #if MICROPY_MODULE___FILE__
             qstr frozen_file_qstr = qstr_from_str(file_str + frozen_path_prefix_len);
             #else
             qstr frozen_file_qstr = MP_QSTRnull;
@@ -296,7 +305,7 @@ static void do_load(mp_module_context_t *module_obj, vstr_t *file) {
 
 // Convert a relative (to the current module) import, going up "level" levels,
 // into an absolute import.
-static void evaluate_relative_import(mp_int_t level, const char **module_name, size_t *module_name_len) {
+static void evaluate_relative_import(mp_int_t level, const char **module_name, size_t *module_name_len, mp_obj_t globals) {
     // What we want to do here is to take the name of the current module,
     // remove <level> trailing components, and concatenate the passed-in
     // module name.
@@ -305,7 +314,7 @@ static void evaluate_relative_import(mp_int_t level, const char **module_name, s
     // module's position in the package hierarchy."
     // http://legacy.python.org/dev/peps/pep-0328/#relative-imports-and-name
 
-    mp_obj_t current_module_name_obj = mp_obj_dict_get(MP_OBJ_FROM_PTR(mp_globals_get()), MP_OBJ_NEW_QSTR(MP_QSTR___name__));
+    mp_obj_t current_module_name_obj = mp_obj_dict_get(globals, MP_OBJ_NEW_QSTR(MP_QSTR___name__));
     assert(current_module_name_obj != MP_OBJ_NULL);
 
     #if MICROPY_MODULE_OVERRIDE_MAIN_IMPORT && MICROPY_CPYTHON_COMPAT
@@ -313,12 +322,12 @@ static void evaluate_relative_import(mp_int_t level, const char **module_name, s
         // This is a module loaded by -m command-line switch (e.g. unix port),
         // and so its __name__ has been set to "__main__". Get its real name
         // that we stored during import in the __main__ attribute.
-        current_module_name_obj = mp_obj_dict_get(MP_OBJ_FROM_PTR(mp_globals_get()), MP_OBJ_NEW_QSTR(MP_QSTR___main__));
+        current_module_name_obj = mp_obj_dict_get(globals, MP_OBJ_NEW_QSTR(MP_QSTR___main__));
     }
     #endif
 
     // If we have a __path__ in the globals dict, then we're a package.
-    bool is_pkg = mp_map_lookup(&mp_globals_get()->map, MP_OBJ_NEW_QSTR(MP_QSTR___path__), MP_MAP_LOOKUP);
+    bool is_pkg = mp_map_lookup(mp_obj_dict_get_map(globals), MP_OBJ_NEW_QSTR(MP_QSTR___path__), MP_MAP_LOOKUP);
 
     #if DEBUG_PRINT
     DEBUG_printf("Current module/package: ");
@@ -396,7 +405,7 @@ static mp_obj_t process_import_at_level(qstr full_mod_name, qstr level_mod_name,
     // Immediately return if the module at this level is already loaded.
     mp_map_elem_t *elem;
 
-    #if MICROPY_PY_SYS
+    #if MICROPY_PY_SYS && MICROPY_PY_SYS_PATH
     // If sys.path is empty, the intention is to force using a built-in. This
     // means we should also ignore any loaded modules with the same name
     // which may have come from the filesystem.
@@ -452,6 +461,7 @@ static mp_obj_t process_import_at_level(qstr full_mod_name, qstr level_mod_name,
     // all the locations in sys.path.
     stat = stat_find_module(full_mod_name, &path);
 
+    #if MICROPY_HAVE_REGISTERED_EXTENSIBLE_MODULES
     // If filesystem failed, now try and see if it matches an extensible
     // built-in module.
     if (stat == MP_IMPORT_STAT_NO_EXIST) {
@@ -460,6 +470,7 @@ static mp_obj_t process_import_at_level(qstr full_mod_name, qstr level_mod_name,
             return module_obj;
         }
     }
+    #endif
 
     // Not already loaded, and not a built-in, so look at the stat result from the filesystem/frozen.
 
@@ -511,22 +522,16 @@ static mp_obj_t process_import_at_level(qstr full_mod_name, qstr level_mod_name,
         // Store the __path__ attribute onto this module.
         // https://docs.python.org/3/reference/import.html
         // "Specifically, any module that contains a __path__ attribute is considered a package."
-        // This gets used later to locate any subpackages of this module.
         mp_store_attr(module_obj, MP_QSTR___path__, mp_obj_new_str(vstr_str(&path), vstr_len(&path)));
-        size_t orig_path_len = path.len;
-        vstr_add_str(&path, PATH_SEP_CHAR "__init__.py");
-
-        // execute "path/__init__.py" (if available).
-        if (stat_file_py_or_mpy(&path) == MP_IMPORT_STAT_FILE) {
-            do_load(MP_OBJ_TO_PTR(module_obj), &path);
-        } else {
-            // this should not happen
-            // mp_raise_msg(&mp_type_ImportError, MP_ERROR_TEXT("load error"));
-        }
-        // Remove /__init__.py suffix from path.
-        path.len = orig_path_len;
-    } else { // MP_IMPORT_STAT_FILE
+    } else { // MP_IMPORT_STAT_FILE or FILE_PKG
         // File -- execute "path.(m)py".
+        if (stat == MP_IMPORT_STAT_FILE_PKG) {
+            // add path attribute
+            size_t path_len = path.len;
+            mp_store_attr(module_obj, MP_QSTR___path__,
+                mp_obj_new_str(vstr_str(&path),
+                    path_len - 11 - (path.buf[path_len - 3] == 'm')));
+        }
         do_load(MP_OBJ_TO_PTR(module_obj), &path);
         // Note: This should be the last component in the import path. If
         // there are remaining components then in the next call to
@@ -584,10 +589,19 @@ mp_obj_t mp_builtin___import___default(size_t n_args, const mp_obj_t *args) {
     const char *module_name = mp_obj_str_get_data(module_name_obj, &module_name_len);
 
     if (level != 0) {
+        // This is the dict with all global symbols.
+        mp_obj_t globals = MP_OBJ_FROM_PTR(mp_globals_get());
+        if (n_args >= 2 && args[1] != mp_const_none) {
+            globals = args[1];
+            if (!mp_obj_is_type(globals, &mp_type_dict)) {
+                mp_raise_TypeError(NULL);
+            }
+        }
+
         // Turn "foo.bar" with level=3 into "<current module 3 components>.foo.bar".
         // Current module name is extracted from globals().__name__.
-        evaluate_relative_import(level, &module_name, &module_name_len);
         // module_name is now an absolute module path.
+        evaluate_relative_import(level, &module_name, &module_name_len, globals);
     }
 
     if (module_name_len == 0) {
@@ -663,11 +677,13 @@ mp_obj_t mp_builtin___import___default(size_t n_args, const mp_obj_t *args) {
     if (module_obj != MP_OBJ_NULL) {
         return module_obj;
     }
+    #if MICROPY_HAVE_REGISTERED_EXTENSIBLE_MODULES
     // Now try as an extensible built-in (e.g. `time`).
     module_obj = mp_module_get_builtin(module_name_qstr, true);
     if (module_obj != MP_OBJ_NULL) {
         return module_obj;
     }
+    #endif
 
     // Couldn't find the module, so fail
     #if MICROPY_ERROR_REPORTING <= MICROPY_ERROR_REPORTING_TERSE

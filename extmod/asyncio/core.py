@@ -33,7 +33,7 @@ class BaseExceptionGroup(BaseException):
         else:
             b = None
         return a, b
-    
+
     @property
     def exceptions(self):
         return self.args[1]
@@ -83,8 +83,8 @@ class SleepHandler:
             raise self.exc
 
 
-# Pause task execution for the given time (integer in milliseconds, uPy extension)
-# Try not to allocate a SleepHandler on the heap if possible
+# Pause task execution for the given time (integer in milliseconds, MicroPython extension)
+# Try not to allocate a SleepHandler on the heap if possible.
 def sleep_ms(t, sgen=SleepHandler()):
     if sgen.state is not None:  # the static one is busy
         sgen = SleepHandler()

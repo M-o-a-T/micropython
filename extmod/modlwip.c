@@ -70,6 +70,10 @@
 
 #define TCP_NODELAY TF_NODELAY
 
+// Socket flags
+#define MSG_PEEK     0x01
+#define MSG_DONTWAIT 0x02
+
 // For compatibilily with older lwIP versions.
 #ifndef ip_set_option
 #define ip_set_option(pcb, opt)   ((pcb)->so_options |= (opt))
@@ -209,7 +213,7 @@ static MP_DEFINE_CONST_OBJ_TYPE(
 // TODO: We just know that change happened somewhere between 1.4.0 and 1.4.1,
 // investigate in more detail.
 #if LWIP_VERSION_MACRO < 0x01040100
-static const int error_lookup_table[] = {
+static const int8_t error_lookup_table[] = {
     0,                /* ERR_OK          0      No error, everything OK. */
     MP_ENOMEM,        /* ERR_MEM        -1      Out of memory error.     */
     MP_ENOBUFS,       /* ERR_BUF        -2      Buffer error.            */
@@ -230,7 +234,7 @@ static const int error_lookup_table[] = {
     MP_EBADF,         /* _ERR_BADF      -16     Closed socket (null pcb) */
 };
 #elif LWIP_VERSION_MACRO < 0x02000000
-static const int error_lookup_table[] = {
+static const int8_t error_lookup_table[] = {
     0,                /* ERR_OK          0      No error, everything OK. */
     MP_ENOMEM,        /* ERR_MEM        -1      Out of memory error.     */
     MP_ENOBUFS,       /* ERR_BUF        -2      Buffer error.            */
@@ -254,7 +258,7 @@ static const int error_lookup_table[] = {
 // Matches lwIP 2.0.3
 #undef _ERR_BADF
 #define _ERR_BADF -17
-static const int error_lookup_table[] = {
+static const int8_t error_lookup_table[] = {
     0,                /* ERR_OK          0      No error, everything OK  */
     MP_ENOMEM,        /* ERR_MEM        -1      Out of memory error      */
     MP_ENOBUFS,       /* ERR_BUF        -2      Buffer error             */
@@ -344,8 +348,9 @@ typedef struct _lwip_socket_obj_t {
     #define STATE_LISTENING 1
     #define STATE_CONNECTING 2
     #define STATE_CONNECTED 3
-    #define STATE_PEER_CLOSED 4
-    #define STATE_ACTIVE_UDP 5
+    #define STATE_ACTIVE_UDP 4
+    #define STATE_PEER_CLOSED 5 // Values higher than this must also be closed by peer
+    #define STATE_PEER_RST_HANDLED 6
     // Negative value is lwIP error
     int8_t state;
 } lwip_socket_obj_t;
@@ -366,14 +371,10 @@ static struct tcp_pcb *volatile *lwip_socket_incoming_array(lwip_socket_obj_t *s
     }
 }
 
-static void lwip_socket_free_incoming(lwip_socket_obj_t *socket) {
-    bool socket_is_listener =
-        socket->type == MOD_NETWORK_SOCK_STREAM
-        && socket->pcb.tcp->state == LISTEN;
-
-    if (!socket_is_listener) {
+static void lwip_socket_free_incoming(lwip_socket_obj_t *socket, bool free_queued_stream_data) {
+    if (socket->state != STATE_LISTENING) {
         if (socket->type == MOD_NETWORK_SOCK_STREAM) {
-            if (socket->incoming.tcp.pbuf != NULL) {
+            if (free_queued_stream_data && socket->incoming.tcp.pbuf != NULL) {
                 pbuf_free(socket->incoming.tcp.pbuf);
                 socket->incoming.tcp.pbuf = NULL;
             }
@@ -399,6 +400,8 @@ static void lwip_socket_free_incoming(lwip_socket_obj_t *socket) {
                 tcp_array[i] = NULL;
             }
         }
+        // This socket is now a non-listening stream, so clear the relevant state.
+        socket->incoming.tcp.pbuf = NULL;
     }
 }
 
@@ -487,8 +490,9 @@ static void _lwip_udp_incoming(void *arg, struct udp_pcb *upcb, struct pbuf *p, 
 static void _lwip_tcp_error(void *arg, err_t err) {
     lwip_socket_obj_t *socket = (lwip_socket_obj_t *)arg;
 
-    // Free any incoming buffers or connections that are stored
-    lwip_socket_free_incoming(socket);
+    // Free any incoming buffers or connections that are stored, but keep potential
+    // queued TCP data in case it's read later.  Will be freed by MP_STREAM_CLOSE.
+    lwip_socket_free_incoming(socket, false);
     // Pass the error code back via the connection variable.
     socket->state = err;
     // If we got here, the lwIP stack either has deallocated or will deallocate the pcb.
@@ -673,13 +677,13 @@ static mp_uint_t lwip_raw_udp_send(lwip_socket_obj_t *socket, const byte *buf, m
 }
 
 // Helper function for recv/recvfrom to handle raw/UDP packets
-static mp_uint_t lwip_raw_udp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_t len, ip_addr_t *ip, mp_uint_t *port, int *_errno) {
+static mp_uint_t lwip_raw_udp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_t len, mp_int_t flags, ip_addr_t *ip, mp_uint_t *port, int *_errno) {
 
     lwip_incoming_packet_t *slot = &socket->incoming.udp_raw.array[socket->incoming.udp_raw.iget];
 
     if (slot->pbuf == NULL) {
-        if (socket->timeout == 0) {
-            // Non-blocking socket.
+        // Non-blocking socket or flag
+        if (socket->timeout == 0 || (flags & MSG_DONTWAIT)) {
             *_errno = MP_EAGAIN;
             return -1;
         }
@@ -705,9 +709,11 @@ static mp_uint_t lwip_raw_udp_receive(lwip_socket_obj_t *socket, byte *buf, mp_u
     MICROPY_PY_LWIP_ENTER
 
     u16_t result = pbuf_copy_partial(p, buf, ((p->tot_len > len) ? len : p->tot_len), 0);
-    pbuf_free(p);
-    slot->pbuf = NULL;
-    socket->incoming.udp_raw.iget = (socket->incoming.udp_raw.iget + 1) % LWIP_INCOMING_PACKET_QUEUE_LEN;
+    if ((flags & MSG_PEEK) == 0) {
+        pbuf_free(p);
+        slot->pbuf = NULL;
+        socket->incoming.udp_raw.iget = (socket->incoming.udp_raw.iget + 1) % LWIP_INCOMING_PACKET_QUEUE_LEN;
+    }
 
     MICROPY_PY_LWIP_EXIT
 
@@ -815,15 +821,28 @@ static mp_uint_t lwip_tcp_send(lwip_socket_obj_t *socket, const byte *buf, mp_ui
 }
 
 // Helper function for recv/recvfrom to handle TCP packets
-static mp_uint_t lwip_tcp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_t len, int *_errno) {
-    // Check for any pending errors
-    STREAM_ERROR_CHECK(socket);
+static mp_uint_t lwip_tcp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_t len, mp_int_t flags, int *_errno) {
+    if (socket->state == STATE_LISTENING) {
+        // original socket in listening state, not the accepted connection.
+        *_errno = MP_ENOTCONN;
+        return -1;
+    }
 
     if (socket->incoming.tcp.pbuf == NULL) {
+        // Check for any pending errors that should propagate out on socket read.
+        if (socket->state < 0) {
+            *_errno = error_lookup_table[-socket->state];
+            if (*_errno == MP_ECONNRESET) {
+                socket->state = STATE_PEER_RST_HANDLED;
+            } else {
+                socket->state = _ERR_BADF;
+            }
+            return MP_STREAM_ERROR;
+        }
 
-        // Non-blocking socket
-        if (socket->timeout == 0) {
-            if (socket->state == STATE_PEER_CLOSED) {
+        // Non-blocking socket or flag
+        if (socket->timeout == 0 || (flags & MSG_DONTWAIT)) {
+            if (socket->state >= STATE_PEER_CLOSED) {
                 return 0;
             }
             *_errno = MP_EAGAIN;
@@ -839,7 +858,7 @@ static mp_uint_t lwip_tcp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_
             poll_sockets();
         }
 
-        if (socket->state == STATE_PEER_CLOSED) {
+        if (socket->state >= STATE_PEER_CLOSED) {
             if (socket->incoming.tcp.pbuf == NULL) {
                 // socket closed and no data left in buffer
                 return 0;
@@ -856,8 +875,6 @@ static mp_uint_t lwip_tcp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_
 
     MICROPY_PY_LWIP_ENTER
 
-    assert(socket->pcb.tcp != NULL);
-
     struct pbuf *p = socket->incoming.tcp.pbuf;
 
     mp_uint_t remaining = p->len - socket->recv_offset;
@@ -867,19 +884,23 @@ static mp_uint_t lwip_tcp_receive(lwip_socket_obj_t *socket, byte *buf, mp_uint_
 
     memcpy(buf, (byte *)p->payload + socket->recv_offset, len);
 
-    remaining -= len;
-    if (remaining == 0) {
-        socket->incoming.tcp.pbuf = p->next;
-        // If we don't ref here, free() will free the entire chain,
-        // if we ref, it does what we need: frees 1st buf, and decrements
-        // next buf's refcount back to 1.
-        pbuf_ref(p->next);
-        pbuf_free(p);
-        socket->recv_offset = 0;
-    } else {
-        socket->recv_offset += len;
+    if ((flags & MSG_PEEK) == 0) {
+        remaining -= len;
+        if (remaining == 0) {
+            socket->incoming.tcp.pbuf = p->next;
+            // If we don't ref here, free() will free the entire chain,
+            // if we ref, it does what we need: frees 1st buf, and decrements
+            // next buf's refcount back to 1.
+            pbuf_ref(p->next);
+            pbuf_free(p);
+            socket->recv_offset = 0;
+        } else {
+            socket->recv_offset += len;
+        }
+        if (socket->pcb.tcp != NULL) {
+            tcp_recved(socket->pcb.tcp, len);
+        }
     }
-    tcp_recved(socket->pcb.tcp, len);
 
     MICROPY_PY_LWIP_EXIT
 
@@ -893,7 +914,7 @@ static const mp_obj_type_t lwip_socket_type;
 
 static void lwip_socket_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind) {
     lwip_socket_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_printf(print, "<socket state=%d timeout=%d incoming=", self->state, self->timeout);
+    mp_printf(print, "<socket state=%d timeout=" UINT_FMT " incoming=", self->state, self->timeout);
     if (self->type == MOD_NETWORK_SOCK_STREAM) {
         mp_printf(print, "%p off=%d>", self->incoming.tcp.pbuf, self->recv_offset);
     } else {
@@ -1077,15 +1098,10 @@ static mp_obj_t lwip_socket_accept(mp_obj_t self_in) {
         mp_raise_OSError(MP_EOPNOTSUPP);
     }
 
-    // Create new socket object, do it here because we must not raise an out-of-memory
-    // exception when the LWIP concurrency lock is held
-    lwip_socket_obj_t *socket2 = mp_obj_malloc_with_finaliser(lwip_socket_obj_t, &lwip_socket_type);
-
     MICROPY_PY_LWIP_ENTER
 
     if (socket->pcb.tcp == NULL) {
         MICROPY_PY_LWIP_EXIT
-        m_del_obj(lwip_socket_obj_t, socket2);
         mp_raise_OSError(MP_EBADF);
     }
 
@@ -1093,7 +1109,6 @@ static mp_obj_t lwip_socket_accept(mp_obj_t self_in) {
     struct tcp_pcb *listener = socket->pcb.tcp;
     if (listener->state != LISTEN) {
         MICROPY_PY_LWIP_EXIT
-        m_del_obj(lwip_socket_obj_t, socket2);
         mp_raise_OSError(MP_EINVAL);
     }
 
@@ -1110,7 +1125,6 @@ static mp_obj_t lwip_socket_accept(mp_obj_t self_in) {
             }
             if (socket_is_timedout(socket, ticks_start)) {
                 MICROPY_PY_LWIP_EXIT
-                m_del_obj(lwip_socket_obj_t, socket2);
                 if (socket->timeout == 0) {
                     mp_raise_OSError(MP_EAGAIN);
                 } else {
@@ -1121,13 +1135,20 @@ static mp_obj_t lwip_socket_accept(mp_obj_t self_in) {
     }
 
     // We get a new pcb handle...
-    socket2->pcb.tcp = *incoming_connection;
+    struct tcp_pcb *pcb_new = *incoming_connection;
     if (++socket->incoming.connection.iget >= socket->incoming.connection.alloc) {
         socket->incoming.connection.iget = 0;
     }
     *incoming_connection = NULL;
 
+    MICROPY_PY_LWIP_EXIT
+
     // ...and set up the new socket for it.
+    //
+    // Creating the new socket object must be done in one step due to the finaliser, and
+    // outside the lwIP concurrency lock in case it raises an out-of-memory exception.
+    lwip_socket_obj_t *socket2 = mp_obj_malloc_with_finaliser(lwip_socket_obj_t, &lwip_socket_type);
+    socket2->pcb.tcp = pcb_new;
     socket2->domain = MOD_NETWORK_AF_INET;
     socket2->type = MOD_NETWORK_SOCK_STREAM;
     socket2->incoming.tcp.pbuf = NULL;
@@ -1135,10 +1156,12 @@ static mp_obj_t lwip_socket_accept(mp_obj_t self_in) {
     socket2->state = STATE_CONNECTED;
     socket2->recv_offset = 0;
     socket2->callback = MP_OBJ_NULL;
+
+    MICROPY_PY_LWIP_REENTER
+
     tcp_arg(socket2->pcb.tcp, (void *)socket2);
     tcp_err(socket2->pcb.tcp, _lwip_tcp_error);
     tcp_recv(socket2->pcb.tcp, _lwip_tcp_recv);
-
     tcp_accepted(listener);
 
     MICROPY_PY_LWIP_EXIT
@@ -1271,40 +1294,57 @@ static mp_obj_t lwip_socket_send(mp_obj_t self_in, mp_obj_t buf_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(lwip_socket_send_obj, lwip_socket_send);
 
-static mp_obj_t lwip_socket_recv(mp_obj_t self_in, mp_obj_t len_in) {
-    lwip_socket_obj_t *socket = MP_OBJ_TO_PTR(self_in);
+// Common implementation for recv & recvfrom
+static mp_obj_t lwip_socket_recv_common(size_t n_args, const mp_obj_t *args, ip_addr_t *ip, mp_uint_t *port) {
+    lwip_socket_obj_t *socket = MP_OBJ_TO_PTR(args[0]);
+    mp_int_t len = mp_obj_get_int(args[1]);
+    mp_int_t flags = n_args > 2 ? mp_obj_get_int(args[2]) : 0;
     int _errno;
-
-    lwip_socket_check_connected(socket);
-
-    mp_int_t len = mp_obj_get_int(len_in);
     vstr_t vstr;
+    mp_uint_t ret = 0;
+
     vstr_init_len(&vstr, len);
 
-    mp_uint_t ret = 0;
     switch (socket->type) {
-        case MOD_NETWORK_SOCK_STREAM: {
-            ret = lwip_tcp_receive(socket, (byte *)vstr.buf, len, &_errno);
+        case MOD_NETWORK_SOCK_STREAM:
+            if (ip != NULL) {
+                *ip = socket->tcp_peer_addr;
+                *port = (mp_uint_t)socket->tcp_peer_port;
+            }
+            ret = lwip_tcp_receive(socket, (byte *)vstr.buf, len, flags, &_errno);
             break;
-        }
         case MOD_NETWORK_SOCK_DGRAM:
         #if MICROPY_PY_LWIP_SOCK_RAW
         case MOD_NETWORK_SOCK_RAW:
         #endif
-            ret = lwip_raw_udp_receive(socket, (byte *)vstr.buf, len, NULL, NULL, &_errno);
+            lwip_socket_check_connected(socket);
+            ret = lwip_raw_udp_receive(socket, (byte *)vstr.buf, len, flags, ip, port, &_errno);
             break;
     }
     if (ret == -1) {
         mp_raise_OSError(_errno);
     }
-
     if (ret == 0) {
         return mp_const_empty_bytes;
     }
     vstr.len = ret;
     return mp_obj_new_bytes_from_vstr(&vstr);
 }
-static MP_DEFINE_CONST_FUN_OBJ_2(lwip_socket_recv_obj, lwip_socket_recv);
+
+static mp_obj_t lwip_socket_recv(size_t n_args, const mp_obj_t *args) {
+    return lwip_socket_recv_common(n_args, args, NULL, NULL);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lwip_socket_recv_obj, 2, 3, lwip_socket_recv);
+
+static mp_obj_t lwip_socket_recvfrom(size_t n_args, const mp_obj_t *args) {
+    ip_addr_t ip;
+    mp_uint_t port;
+    mp_obj_t tuple[2];
+    tuple[0] = lwip_socket_recv_common(n_args, args, &ip, &port);
+    tuple[1] = lwip_format_inet_addr(&ip, port);
+    return mp_obj_new_tuple(2, tuple);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(lwip_socket_recvfrom_obj, 2, 3, lwip_socket_recvfrom);
 
 static mp_obj_t lwip_socket_sendto(mp_obj_t self_in, mp_obj_t data_in, mp_obj_t addr_in) {
     lwip_socket_obj_t *socket = MP_OBJ_TO_PTR(self_in);
@@ -1338,50 +1378,6 @@ static mp_obj_t lwip_socket_sendto(mp_obj_t self_in, mp_obj_t data_in, mp_obj_t 
     return mp_obj_new_int_from_uint(ret);
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(lwip_socket_sendto_obj, lwip_socket_sendto);
-
-static mp_obj_t lwip_socket_recvfrom(mp_obj_t self_in, mp_obj_t len_in) {
-    lwip_socket_obj_t *socket = MP_OBJ_TO_PTR(self_in);
-    int _errno;
-
-    lwip_socket_check_connected(socket);
-
-    mp_int_t len = mp_obj_get_int(len_in);
-    vstr_t vstr;
-    vstr_init_len(&vstr, len);
-    ip_addr_t ip;
-    mp_uint_t port;
-
-    mp_uint_t ret = 0;
-    switch (socket->type) {
-        case MOD_NETWORK_SOCK_STREAM: {
-            ip = socket->tcp_peer_addr;
-            port = (mp_uint_t)socket->tcp_peer_port;
-            ret = lwip_tcp_receive(socket, (byte *)vstr.buf, len, &_errno);
-            break;
-        }
-        case MOD_NETWORK_SOCK_DGRAM:
-        #if MICROPY_PY_LWIP_SOCK_RAW
-        case MOD_NETWORK_SOCK_RAW:
-        #endif
-            ret = lwip_raw_udp_receive(socket, (byte *)vstr.buf, len, &ip, &port, &_errno);
-            break;
-    }
-    if (ret == -1) {
-        mp_raise_OSError(_errno);
-    }
-
-    mp_obj_t tuple[2];
-    if (ret == 0) {
-        tuple[0] = mp_const_empty_bytes;
-    } else {
-        vstr.len = ret;
-        tuple[0] = mp_obj_new_bytes_from_vstr(&vstr);
-    }
-    tuple[1] = lwip_format_inet_addr(&ip, port);
-
-    return mp_obj_new_tuple(2, tuple);
-}
-static MP_DEFINE_CONST_FUN_OBJ_2(lwip_socket_recvfrom_obj, lwip_socket_recvfrom);
 
 static mp_obj_t lwip_socket_sendall(mp_obj_t self_in, mp_obj_t buf_in) {
     lwip_socket_obj_t *socket = MP_OBJ_TO_PTR(self_in);
@@ -1542,12 +1538,12 @@ static mp_uint_t lwip_socket_read(mp_obj_t self_in, void *buf, mp_uint_t size, i
 
     switch (socket->type) {
         case MOD_NETWORK_SOCK_STREAM:
-            return lwip_tcp_receive(socket, buf, size, errcode);
+            return lwip_tcp_receive(socket, buf, size, 0, errcode);
         case MOD_NETWORK_SOCK_DGRAM:
         #if MICROPY_PY_LWIP_SOCK_RAW
         case MOD_NETWORK_SOCK_RAW:
         #endif
-            return lwip_raw_udp_receive(socket, buf, size, NULL, NULL, errcode);
+            return lwip_raw_udp_receive(socket, buf, size, 0, NULL, NULL, errcode);
     }
     // Unreachable
     return MP_STREAM_ERROR;
@@ -1594,7 +1590,10 @@ static mp_uint_t lwip_socket_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
                 }
             } else if (socket->type == MOD_NETWORK_SOCK_STREAM) {
                 // For TCP sockets there is just one slot for incoming data
-                if (socket->incoming.tcp.pbuf != NULL) {
+                // The socket is also readable when in RST state
+                if (socket->incoming.tcp.pbuf != NULL
+                    || socket->state == ERR_RST
+                    || socket->state == STATE_PEER_RST_HANDLED) {
                     ret |= MP_STREAM_POLL_RD;
                 }
             } else {
@@ -1633,6 +1632,8 @@ static mp_uint_t lwip_socket_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
         } else if (socket->state == ERR_RST) {
             // Socket was reset by peer, a write will return an error
             ret |= flags & MP_STREAM_POLL_WR;
+            ret |= MP_STREAM_POLL_ERR | MP_STREAM_POLL_HUP;
+        } else if (socket->state == STATE_PEER_RST_HANDLED) {
             ret |= MP_STREAM_POLL_HUP;
         } else if (socket->state == _ERR_BADF) {
             ret |= MP_STREAM_POLL_NVAL;
@@ -1643,13 +1644,14 @@ static mp_uint_t lwip_socket_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
         }
 
     } else if (request == MP_STREAM_CLOSE) {
+        // Free any incoming buffers or connections that are stored
+        lwip_socket_free_incoming(socket, true);
+
         if (socket->pcb.tcp == NULL) {
+            socket->state = _ERR_BADF;
             MICROPY_PY_LWIP_EXIT
             return 0;
         }
-
-        // Free any incoming buffers or connections that are stored
-        lwip_socket_free_incoming(socket);
 
         switch (socket->type) {
             case MOD_NETWORK_SOCK_STREAM: {
@@ -1658,7 +1660,7 @@ static mp_uint_t lwip_socket_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
                 tcp_err(socket->pcb.tcp, NULL);
                 tcp_recv(socket->pcb.tcp, NULL);
 
-                if (socket->pcb.tcp->state != LISTEN) {
+                if (socket->state != STATE_LISTENING) {
                     // Schedule a callback to abort the connection if it's not cleanly closed after
                     // the given timeout.  The callback must be set before calling tcp_close since
                     // the latter may free the pcb; if it doesn't then the callback will be active.
@@ -1737,18 +1739,6 @@ static MP_DEFINE_CONST_OBJ_TYPE(
     );
 
 /******************************************************************************/
-// Support functions for memory protection. lwIP has its own memory management
-// routines for its internal structures, and since they might be called in
-// interrupt handlers, they need some protection.
-sys_prot_t sys_arch_protect() {
-    return (sys_prot_t)MICROPY_BEGIN_ATOMIC_SECTION();
-}
-
-void sys_arch_unprotect(sys_prot_t state) {
-    MICROPY_END_ATOMIC_SECTION((mp_uint_t)state);
-}
-
-/******************************************************************************/
 // Polling callbacks for the interfaces connected to lwIP. Right now it calls
 // itself a "list" but isn't; we only support a single interface.
 
@@ -1814,10 +1804,11 @@ static mp_obj_t lwip_getaddrinfo(size_t n_args, const mp_obj_t *args) {
     mp_obj_t host_in = args[0], port_in = args[1];
     const char *host = mp_obj_str_get_str(host_in);
     mp_int_t port = mp_obj_get_int(port_in);
+    mp_int_t family = 0;
 
     // If constraints were passed then check they are compatible with the supported params
     if (n_args > 2) {
-        mp_int_t family = mp_obj_get_int(args[2]);
+        family = mp_obj_get_int(args[2]);
         mp_int_t type = 0;
         mp_int_t proto = 0;
         mp_int_t flags = 0;
@@ -1830,7 +1821,7 @@ static mp_obj_t lwip_getaddrinfo(size_t n_args, const mp_obj_t *args) {
                 }
             }
         }
-        if (!((family == 0 || family == MOD_NETWORK_AF_INET)
+        if (!((family == 0 || family == MOD_NETWORK_AF_INET || family == MOD_NETWORK_AF_INET6)
               && (type == 0 || type == MOD_NETWORK_SOCK_STREAM)
               && proto == 0
               && flags == 0)) {
@@ -1841,11 +1832,23 @@ static mp_obj_t lwip_getaddrinfo(size_t n_args, const mp_obj_t *args) {
     getaddrinfo_state_t state;
     state.status = 0;
 
+    #if LWIP_VERSION_MAJOR >= 2
+    // If family was specified, then try and resolve the address type as
+    // requested. Otherwise, use the default from network configuration.
+    if (family == MOD_NETWORK_AF_INET) {
+        family = LWIP_DNS_ADDRTYPE_IPV4;
+    } else if (family == MOD_NETWORK_AF_INET6) {
+        family = LWIP_DNS_ADDRTYPE_IPV6;
+    } else {
+        family = mp_mod_network_prefer_dns_use_ip_version == 4 ? LWIP_DNS_ADDRTYPE_IPV4_IPV6 : LWIP_DNS_ADDRTYPE_IPV6_IPV4;
+    }
+    #endif
+
     MICROPY_PY_LWIP_ENTER
     #if LWIP_VERSION_MAJOR < 2
     err_t ret = dns_gethostbyname(host, (ip_addr_t *)&state.ipaddr, lwip_getaddrinfo_cb, &state);
     #else
-    err_t ret = dns_gethostbyname_addrtype(host, (ip_addr_t *)&state.ipaddr, lwip_getaddrinfo_cb, &state, mp_mod_network_prefer_dns_use_ip_version == 4 ? LWIP_DNS_ADDRTYPE_IPV4_IPV6 : LWIP_DNS_ADDRTYPE_IPV6_IPV4);
+    err_t ret = dns_gethostbyname_addrtype(host, (ip_addr_t *)&state.ipaddr, lwip_getaddrinfo_cb, &state, family);
     #endif
     MICROPY_PY_LWIP_EXIT
 
@@ -1919,6 +1922,8 @@ static const mp_rom_map_elem_t mp_module_lwip_globals_table[] = {
 
     { MP_ROM_QSTR(MP_QSTR_IPPROTO_TCP), MP_ROM_INT(IP_PROTO_TCP) },
     { MP_ROM_QSTR(MP_QSTR_TCP_NODELAY), MP_ROM_INT(TCP_NODELAY) },
+    { MP_ROM_QSTR(MP_QSTR_MSG_PEEK), MP_ROM_INT(MSG_PEEK) },
+    { MP_ROM_QSTR(MP_QSTR_MSG_DONTWAIT), MP_ROM_INT(MSG_DONTWAIT) },
 };
 
 static MP_DEFINE_CONST_DICT(mp_module_lwip_globals, mp_module_lwip_globals_table);

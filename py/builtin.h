@@ -32,6 +32,7 @@ typedef enum {
     MP_IMPORT_STAT_NO_EXIST,
     MP_IMPORT_STAT_DIR,
     MP_IMPORT_STAT_FILE,
+    MP_IMPORT_STAT_FILE_PKG,
 } mp_import_stat_t;
 
 #if MICROPY_VFS
@@ -138,6 +139,7 @@ extern const mp_obj_module_t mp_module_sys;
 extern const mp_obj_module_t mp_module_errno;
 extern const mp_obj_module_t mp_module_uctypes;
 extern const mp_obj_module_t mp_module_machine;
+extern const mp_obj_module_t mp_module_math;
 
 extern const char MICROPY_PY_BUILTINS_HELP_TEXT[];
 

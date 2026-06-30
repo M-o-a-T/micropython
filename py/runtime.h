@@ -52,6 +52,12 @@ typedef enum {
     MP_ARG_KW_ONLY   = 0x200,
 } mp_arg_flag_t;
 
+typedef enum {
+    MP_HANDLE_PENDING_CALLBACKS_ONLY,
+    MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS,
+    MP_HANDLE_PENDING_CALLBACKS_AND_CLEAR_EXCEPTIONS,
+} mp_handle_pending_behaviour_t;
+
 typedef union _mp_arg_val_t {
     bool u_bool;
     mp_int_t u_int;
@@ -100,7 +106,14 @@ void mp_sched_keyboard_interrupt(void);
 #if MICROPY_ENABLE_VM_ABORT
 void mp_sched_vm_abort(void);
 #endif
-void mp_handle_pending(bool raise_exc);
+
+void mp_handle_pending_internal(mp_handle_pending_behaviour_t behavior);
+
+static inline void mp_handle_pending(bool raise_exc) {
+    mp_handle_pending_internal(raise_exc ?
+        MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS :
+        MP_HANDLE_PENDING_CALLBACKS_AND_CLEAR_EXCEPTIONS);
+}
 
 #if MICROPY_ENABLE_SCHEDULER
 void mp_sched_lock(void);
@@ -168,6 +181,12 @@ static inline void mp_thread_init_state(mp_state_thread_t *ts, size_t stack_size
     ts->nlr_top = NULL;
     ts->nlr_jump_callback_top = NULL;
     ts->mp_pending_exception = MP_OBJ_NULL;
+
+    #if MICROPY_PY_SYS_SETTRACE
+    ts->prof_trace_callback = MP_OBJ_NULL;
+    ts->prof_callback_is_executing = false;
+    ts->current_code_state = NULL;
+    #endif
 
     // If locals/globals are not given, inherit from main thread
     if (locals == NULL) {

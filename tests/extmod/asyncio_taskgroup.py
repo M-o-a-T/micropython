@@ -250,6 +250,9 @@ async def test_taskgroup_07():
 
 
 async def test_taskgroup_08():
+    if sys.implementation.name != "micropython":
+        print("Not handled: divide by zero")
+
     async def foo():
         await asyncio.sleep(0.1)
         1 / 0
@@ -354,6 +357,9 @@ async def test_taskgroup_10():
 
 
 async def test_taskgroup_11():
+    if sys.implementation.name != "micropython":
+        print("Not handled: divide by zero")
+
     async def foo():
         await asyncio.sleep(0.1)
         1 / 0
@@ -389,6 +395,9 @@ async def test_taskgroup_11():
 
 
 async def test_taskgroup_12():
+    if sys.implementation.name != "micropython":
+        print("Not handled: divide by zero")
+
     async def foo():
         await asyncio.sleep(0.1)
         1 / 0
