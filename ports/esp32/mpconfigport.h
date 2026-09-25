@@ -108,6 +108,7 @@
 #define MICROPY_PY_BLUETOOTH_ENABLE_PAIRING_BONDING (1)
 #define MICROPY_BLUETOOTH_NIMBLE            (1)
 #define MICROPY_BLUETOOTH_NIMBLE_BINDINGS_ONLY (1)
+#define MICROPY_BLUETOOTH_NIMBLE_PORT_INIT_RETURNS_ERROR (1)
 #endif // MICROPY_PY_BLUETOOTH
 
 #define MICROPY_PY_RANDOM_SEED_INIT_FUNC    (esp_random())
@@ -143,10 +144,13 @@
 #define MICROPY_PY_MACHINE_I2C              (1)
 #define MICROPY_PY_MACHINE_I2C_TRANSFER_WRITE1 (1)
 #ifndef MICROPY_PY_MACHINE_I2C_TARGET
-// I2C target hardware is limited on ESP32 (eg read event comes after the read) so we only support newer SoCs.
-#define MICROPY_PY_MACHINE_I2C_TARGET       (SOC_I2C_SUPPORT_SLAVE && !CONFIG_IDF_TARGET_ESP32)
+// I2C target hardware is limited on ESP32 (eg read event comes after the read) so we only support newer SoCs & ESP-IDF v5.4 or newer
+#define MICROPY_PY_MACHINE_I2C_TARGET       (SOC_I2C_SUPPORT_SLAVE && !CONFIG_IDF_TARGET_ESP32 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0))
 #define MICROPY_PY_MACHINE_I2C_TARGET_INCLUDEFILE "ports/esp32/machine_i2c_target.c"
 #define MICROPY_PY_MACHINE_I2C_TARGET_MAX   (2)
+#endif
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 2) && !defined(MICROPY_HW_ESP_NEW_I2C_DRIVER)
+#define MICROPY_HW_ESP_NEW_I2C_DRIVER       (1)
 #endif
 #define MICROPY_PY_MACHINE_SOFTI2C          (1)
 #define MICROPY_PY_MACHINE_SPI              (1)
@@ -167,6 +171,18 @@
 #define MICROPY_PY_MACHINE_UART_IRQ         (1)
 #define MICROPY_PY_MACHINE_WDT              (1)
 #define MICROPY_PY_MACHINE_WDT_INCLUDEFILE  "ports/esp32/machine_wdt.c"
+#ifndef MICROPY_HW_RTC_USER_MEM_MAX
+#define MICROPY_HW_RTC_USER_MEM_MAX         2048
+#endif
+// machine.mem_backup exposes the RTC user memory as a byte memoryview.
+// RTC.memory() coexists but uses separate length tracking; writes via
+// mem_backup won't update RTC.memory()'s length, and vice versa.
+#if MICROPY_HW_RTC_USER_MEM_MAX > 0
+#ifndef MICROPY_PY_MACHINE_MEM_BACKUP
+#define MICROPY_PY_MACHINE_MEM_BACKUP    (1)
+#endif
+#define MICROPY_PY_MACHINE_MEM_BACKUP_INCLUDEFILE "ports/esp32/machine_mem_backup.c"
+#endif
 #ifndef MICROPY_PY_NETWORK
 #define MICROPY_PY_NETWORK (1)
 #endif
@@ -185,6 +201,8 @@
 #define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "mpy-esp32c5"
 #elif CONFIG_IDF_TARGET_ESP32C6
 #define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "mpy-esp32c6"
+#elif CONFIG_IDF_TARGET_ESP32H2
+#define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "mpy-esp32h2"
 #elif CONFIG_IDF_TARGET_ESP32P4
 #define MICROPY_PY_NETWORK_HOSTNAME_DEFAULT "mpy-esp32p4"
 #endif
@@ -194,14 +212,37 @@
 #ifndef MICROPY_PY_NETWORK_WLAN
 #define MICROPY_PY_NETWORK_WLAN             (1)
 #endif
+#ifndef MICROPY_PY_MACHINE_SDCARD
+#define MICROPY_PY_MACHINE_SDCARD           (1)
+#endif
+#ifndef MICROPY_PY_NETWORK_WLAN_CSI
+#define MICROPY_PY_NETWORK_WLAN_CSI         (CONFIG_ESP_WIFI_CSI_ENABLED)
+#endif
+#if MICROPY_PY_NETWORK_WLAN_CSI
+// CSI_DEFAULT_BUFFER_SIZE is used in network_wlan_csi.c
+#ifndef MICROPY_PY_NETWORK_WLAN_CSI_DEFAULT_BUFFER_SIZE
+#define MICROPY_PY_NETWORK_WLAN_CSI_DEFAULT_BUFFER_SIZE (16)
+#endif
+#endif
 #ifndef MICROPY_HW_ENABLE_SDCARD
 #define MICROPY_HW_ENABLE_SDCARD            (1)
 #endif
+#ifndef MICROPY_HW_SDMMC_DEFAULT_SLOT
+#if CONFIG_IDF_TARGET_ESP32P4
+#define MICROPY_HW_SDMMC_DEFAULT_SLOT       (0)
+#else
+#define MICROPY_HW_SDMMC_DEFAULT_SLOT       (1)
+#endif
+#endif
+#ifndef MICROPY_HW_SDMMC_DEFAULT_WIDTH
+#if CONFIG_IDF_TARGET_ESP32P4
+#define MICROPY_HW_SDMMC_DEFAULT_WIDTH      (4)
+#else
+#define MICROPY_HW_SDMMC_DEFAULT_WIDTH      (1)
+#endif
+#endif
 #define MICROPY_HW_SOFTSPI_MIN_DELAY        (0)
 #define MICROPY_HW_SOFTSPI_MAX_BAUDRATE     (esp_rom_get_cpu_ticks_per_us() * 1000000 / 200) // roughly
-#ifndef MICROPY_HW_ESP_NEW_I2C_DRIVER
-#define MICROPY_HW_ESP_NEW_I2C_DRIVER       (0)
-#endif
 #define MICROPY_PY_SSL                      (MICROPY_PY_NETWORK)
 #define MICROPY_SSL_MBEDTLS                 (MICROPY_PY_SSL)
 #define MICROPY_PY_WEBSOCKET                (MICROPY_PY_NETWORK)
@@ -311,8 +352,7 @@ void *esp_native_code_commit(void *, size_t, void *);
 #if MICROPY_PY_THREAD
 #define MICROPY_EVENT_POLL_HOOK \
     do { \
-        extern void mp_handle_pending(bool); \
-        mp_handle_pending(true); \
+        mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS); \
         MICROPY_PY_SOCKET_EVENTS_HANDLER \
         MP_THREAD_GIL_EXIT(); \
         ulTaskNotifyTake(pdFALSE, 1); \
@@ -326,8 +366,7 @@ void *esp_native_code_commit(void *, size_t, void *);
 #endif
 #define MICROPY_EVENT_POLL_HOOK \
     do { \
-        extern void mp_handle_pending(bool); \
-        mp_handle_pending(true); \
+        mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS); \
         MICROPY_PY_SOCKET_EVENTS_HANDLER \
             MICROPY_PY_WAIT_FOR_INTERRUPT; \
     } while (0);
@@ -392,7 +431,7 @@ typedef long mp_off_t;
 void boardctrl_startup(void);
 
 #ifndef MICROPY_PY_NETWORK_LAN
-#if CONFIG_IDF_TARGET_ESP32 || (CONFIG_ETH_USE_SPI_ETHERNET && (CONFIG_ETH_SPI_ETHERNET_KSZ8851SNL || CONFIG_ETH_SPI_ETHERNET_DM9051 || CONFIG_ETH_SPI_ETHERNET_W5500))
+#if SOC_EMAC_SUPPORTED || (CONFIG_ETH_USE_SPI_ETHERNET && (CONFIG_ETH_SPI_ETHERNET_KSZ8851SNL || CONFIG_ETH_SPI_ETHERNET_DM9051 || CONFIG_ETH_SPI_ETHERNET_W5500))
 #define MICROPY_PY_NETWORK_LAN              (1)
 #else
 #define MICROPY_PY_NETWORK_LAN              (0)

@@ -194,16 +194,12 @@ mp_uint_t mp_hal_ticks_ms(void) {
     return esp_timer_get_time() / 1000;
 }
 
-mp_uint_t mp_hal_ticks_us(void) {
-    return esp_timer_get_time();
-}
-
 void mp_hal_delay_ms(mp_uint_t ms) {
     uint64_t us = (uint64_t)ms * 1000ULL;
     uint64_t dt;
     uint64_t t0 = esp_timer_get_time();
     for (;;) {
-        mp_handle_pending(true);
+        mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
         MICROPY_PY_SOCKET_EVENTS_HANDLER
         MP_THREAD_GIL_EXIT();
         uint64_t t1 = esp_timer_get_time();
@@ -246,7 +242,7 @@ void mp_hal_delay_us(mp_uint_t us) {
         if (dt + pend_overhead < us) {
             // we have enough time to service pending events
             // (don't use MICROPY_EVENT_POLL_HOOK because it also yields)
-            mp_handle_pending(true);
+            mp_handle_pending(MP_HANDLE_PENDING_CALLBACKS_AND_EXCEPTIONS);
         }
     }
 }
@@ -270,5 +266,16 @@ void mp_hal_wake_main_task_from_isr(void) {
     vTaskNotifyGiveFromISR(mp_main_task_handle, &xHigherPriorityTaskWoken);
     if (xHigherPriorityTaskWoken == pdTRUE) {
         portYIELD_FROM_ISR();
+    }
+}
+
+void mp_hal_get_random(size_t n, uint8_t *buf) {
+    uint32_t r = 0;
+    for (int i = 0; i < n; i++) {
+        if ((i & 3) == 0) {
+            r = esp_random(); // returns 32-bit hardware random number
+        }
+        buf[i] = r;
+        r >>= 8;
     }
 }
