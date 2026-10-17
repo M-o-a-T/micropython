@@ -1452,7 +1452,7 @@ unwind_loop:
             // - exceptions re-raised by END_FINALLY
             // - exceptions re-raised explicitly by "raise"
             if (nlr.ret_val != &mp_const_GeneratorExit_obj
-                && get_native_exception(MP_OBJ_FROM_PTR(nlr.ret_val)) != (mp_obj_exception_t *)&mp_base_init_wrapper_obj
+                && get_native_exception(MP_OBJ_FROM_PTR(nlr.ret_val)) != (mp_obj_exception_t *)&mp_native_base_init_wrapper_obj
                 && *code_state->ip != MP_BC_END_FINALLY
                 && *code_state->ip != MP_BC_RAISE_LAST) {
                 const byte *ip = code_state->fun_bc->bytecode;
